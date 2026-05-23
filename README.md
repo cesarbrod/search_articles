@@ -21,7 +21,8 @@ playwright install chromium
 | `python main.py --fetch-content` | Download full article text for all articles (required for search) |
 | `python main.py --list` or `-l` | List articles alphabetically (default) |
 | `python main.py --list --by-date` | List articles by date (newest first) |
-| `python main.py -s TERM [TERM ...], --search TERM [TERM ...]` | Search articles by keyword(s). Use "quoted phrase" for exact match. |
+| `python main.py -s TERM [TERM ...], --search TERM [TERM ...]` | Search articles by keyword(s). Use "quoted phrase" for exact match. Separate terms with OR for OR logic. Default is AND between all terms. |
+| `python main.py --lines N` or `-n N` | Number of text lines to show per search result (default: 3)|
 | `python main.py --count` or `-c` | Show total number of stored articles |
 | `python main.py` | Same as `--list` |
 
