@@ -1,1 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}LinkedIn Articles{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header>
+    <nav>
+      <a href="{{ url_for('index') }}" class="brand">LinkedIn Articles</a>
+      <div class="nav-links">
+        <a href="{{ url_for('article_list') }}">List</a>
+        <a href="{{ url_for('search') }}">Search</a>
+        {% if has_credentials %}
+          <span class="cred-status ok" title="Credentials active">&#10003; Signed in</span>
+          <a href="{{ url_for('logout') }}">Clear credentials</a>
+        {% else %}
+          <a href="{{ url_for('login', next=request.url) }}" class="btn-login">Sign in</a>
+        {% endif %}
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <span>LinkedIn Articles — local only</span>
+  </footer>
+</body>
+</html>
 
