@@ -8,7 +8,7 @@ Scrapes your LinkedIn articles into a local SQLite database and lets you list th
 cd linkedin_articles
 python -m venv ./venv
 source ./venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt #flask is only needed for the web version!
 playwright install chromium
 ```
 
@@ -24,7 +24,13 @@ playwright install chromium
 | `python main.py -s TERM [TERM ...], --search TERM [TERM ...]` | Search articles by keyword(s). Use "quoted phrase" for exact match. Separate terms with OR for OR logic. Default is AND between all terms. |
 | `python main.py --lines N` or `-n N` | Number of text lines to show per search result (default: 3)|
 | `python main.py --count` or `-c` | Show total number of stored articles |
+| `python main.py --other username` | Combined with the --update, --fetch-content and other functions will work with the contents for username |
 | `python main.py` | Same as `--list` |
+
+## Web Version (local computer)
+
+| `python web_server.py` | Opens a browser with persistent credentials |
+
 
 ## Notes
 
