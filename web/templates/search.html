@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Search — LinkedIn Articles{% endblock %}
+
+{% block content %}
+<section class="search-section">
+  <h1>Search</h1>
+
+  <form method="GET" action="{{ url_for('search') }}" class="search-form">
+    <div class="search-row">
+      <input name="q" type="search" value="{{ query }}" placeholder='e.g.  AI  or  "machine learning"  or  "AI" OR "data"'
+             autofocus autocomplete="off" />
+      <button type="submit">Search</button>
+    </div>
+    <div class="search-options">
+      <label>
+        Lines:
+        <input name="lines" type="number" min="1" max="999" value="{{ lines }}" class="lines-input" />
+      </label>
+      <label>
+        Profile:
+        <select name="profile">
+          <option value="">All profiles</option>
+          {% for p in profiles %}
+          <option value="{{ p }}" {{ 'selected' if p == profile_filter }}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+  </form>
+
+  <div class="search-hint">
+    <strong>Syntax:</strong>
+    <code>word1 word2</code> → AND &nbsp;|&nbsp;
+    <code>"exact phrase"</code> → exact &nbsp;|&nbsp;
+    <code>"a" OR "b"</code> → OR
+  </div>
+
+  {% if query %}
+    {% if results %}
+    <p class="count">{{ results|length }} result(s) for <em>{{ query }}</em></p>
+
+    {% for row in results %}
+    <article class="result-card">
+      <div class="result-meta">
+        {% if show_profile_col %}
+        <span class="result-profile">{{ row.profile }}</span>
+        {% endif %}
+        <span class="result-date">{{ row.published or 'unknown date' }}</span>
+      </div>
+      <h2 class="result-title">
+        <a href="{{ row.url }}" target="_blank" rel="noopener">{{ row.title }}</a>
+      </h2>
+      {% if row.content %}
+        {% set content_lines = row.content.splitlines() | select | list %}
+        <div class="result-snippet">
+          {% for line in content_lines[:lines] %}
+            <p>{{ line }}</p>
+          {% endfor %}
+          {% if content_lines|length > lines %}
+          <p class="more">… {{ content_lines|length - lines }} more line(s)</p>
+          {% endif %}
+        </div>
+      {% else %}
+        <p class="no-content">No text stored — run <em>Fetch text</em> from the dashboard.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+
+    {% else %}
+    <p class="empty">No results for <em>{{ query }}</em>.</p>
+    {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

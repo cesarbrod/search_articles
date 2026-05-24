@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — LinkedIn Articles{% endblock %}
+
+{% block content %}
+<section class="dashboard">
+  <h1>Dashboard</h1>
+
+  {% if profiles %}
+  <table class="profile-table">
+    <thead>
+      <tr>
+        <th>Profile</th>
+        <th>Articles</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in profiles %}
+      <tr>
+        <td>
+          <a href="https://www.linkedin.com/in/{{ p }}/" target="_blank" rel="noopener">{{ p }}</a>
+        </td>
+        <td>{{ counts[p] }}</td>
+        <td class="actions">
+          <a href="{{ url_for('article_list', profile=p) }}">List</a>
+          <a href="{{ url_for('search', profile=p) }}">Search</a>
+          {% if has_credentials %}
+          <button class="btn-action" onclick="runUpdate('{{ p }}')">Sync</button>
+          <button class="btn-action" onclick="runFetchContent('{{ p }}')">Fetch text</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No profiles in the database yet.</p>
+  {% endif %}
+
+  {% if has_credentials %}
+  <div class="sync-box">
+    <h2>Add / sync a profile</h2>
+    <form id="sync-form" onsubmit="runUpdate(document.getElementById('profile-input').value); return false;">
+      <input id="profile-input" type="text" placeholder="LinkedIn handle (e.g. ctaurion)" required />
+      <button type="submit">Sync</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="hint"><a href="{{ url_for('login') }}">Sign in</a> to sync or fetch article content.</p>
+  {% endif %}
+
+  <div id="status-msg" class="status-msg hidden"></div>
+  <div id="spinner" class="spinner hidden">Working…</div>
+</section>
+
+<script>
+  function showStatus(msg, isError) {
+    const el = document.getElementById('status-msg');
+    el.textContent = msg;
+    el.className = 'status-msg ' + (isError ? 'error' : 'success');
+  }
+
+  function setSpinner(on) {
+    document.getElementById('spinner').className = 'spinner' + (on ? '' : ' hidden');
+  }
+
+  async function runUpdate(profile) {
+    if (!profile) return;
+    setSpinner(true);
+    showStatus('Syncing ' + profile + '… (a browser window will open)', false);
+    try {
+      const fd = new FormData();
+      fd.append('profile', profile);
+      const res = await fetch('/update', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) {
+        showStatus('Error: ' + data.error, true);
+      } else {
+        showStatus('✔ ' + profile + ': ' + data.new + ' new article(s). Total: ' + data.total + '.', false);
+        setTimeout(() => location.reload(), 1500);
+      }
+    } catch (e) {
+      showStatus('Request failed: ' + e, true);
+    }
+    setSpinner(false);
+  }
+
+  async function runFetchContent(profile) {
+    if (!profile) return;
+    setSpinner(true);
+    showStatus('Fetching article text for ' + profile + '… (a browser window will open)', false);
+    try {
+      const fd = new FormData();
+      fd.append('profile', profile);
+      const res = await fetch('/fetch-content', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) {
+        showStatus('Error: ' + data.error, true);
+      } else {
+        showStatus('✔ ' + profile + ': ' + data.fetched + ' article(s) fetched.', false);
+      }
+    } catch (e) {
+      showStatus('Request failed: ' + e, true);
+    }
+    setSpinner(false);
+  }
+</script>
+{% endblock %}

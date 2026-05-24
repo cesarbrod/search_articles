@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in — LinkedIn Articles{% endblock %}
+
+{% block content %}
+<section class="login-section">
+  <h1>Sign in to LinkedIn</h1>
+  <p class="hint">Credentials are kept in memory for this browser session only — never written to disk.</p>
+
+  <form method="POST" action="{{ url_for('login', next=next_url) }}" class="login-form">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus />
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+    <button type="submit">Save credentials</button>
+  </form>
+</section>
+{% endblock %}

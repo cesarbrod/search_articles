@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Articles — {{ profile }}{% endblock %}
+
+{% block content %}
+<section class="list-section">
+  <div class="list-header">
+    <h1>Articles — <span class="profile-name">{{ profile }}</span></h1>
+    <div class="list-controls">
+      <span>Sort by:</span>
+      <a href="{{ url_for('article_list', profile=profile, order='title') }}"
+         class="{{ 'active' if order == 'title' }}">Title</a>
+      <a href="{{ url_for('article_list', profile=profile, order='date') }}"
+         class="{{ 'active' if order == 'date' }}">Date</a>
+
+      {% if profiles|length > 1 %}
+      <span class="sep">|</span>
+      <span>Profile:</span>
+      {% for p in profiles %}
+        <a href="{{ url_for('article_list', profile=p, order=order) }}"
+           class="{{ 'active' if p == profile }}">{{ p }}</a>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  {% if articles %}
+  <p class="count">{{ articles|length }} article(s)</p>
+  <table class="article-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Title</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in articles %}
+      <tr>
+        <td class="num">{{ loop.index }}</td>
+        <td>
+          <a href="{{ row.url }}" target="_blank" rel="noopener">{{ row.title }}</a>
+        </td>
+        <td class="date">{{ row.published or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No articles for <strong>{{ profile }}</strong> yet.
+    {% if has_credentials %}
+      <a href="{{ url_for('index') }}">Sync from the dashboard.</a>
+    {% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}
