@@ -3,7 +3,7 @@
 LinkedIn Articles CLI
 ---------------------
 Usage:
-  python main.py --update                         Sync your articles (cesarbrod)
+  python main.py --update                         Sync your articles
   python main.py --update --other username        Sync another profile's articles
   python main.py --fetch-content                  Download full text for all your articles
   python main.py --fetch-content --other username Download full text for another profile
