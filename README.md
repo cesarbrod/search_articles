@@ -1,4 +1,4 @@
-# LinkedIn Articles CLI
+# LinkedIn Articles Tricks
 
 Scrapes your LinkedIn articles into a local SQLite database and lets you list them from the command line.
 
