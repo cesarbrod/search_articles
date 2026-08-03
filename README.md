@@ -8,6 +8,7 @@ Scrapes LinkedIn articles into a local SQLite database. Provides both a **CLI** 
 
 ```bash
 cd linkedin_articles
+source ./venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
 ```
