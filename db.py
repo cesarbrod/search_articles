@@ -5,10 +5,22 @@ Database layer — SQLite via stdlib sqlite3.
 import sqlite3
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 
 DB_PATH = Path(__file__).parent / "articles.db"
 
 DEFAULT_PROFILE = "cesarbrod"
+
+
+def _norm_url(url: str) -> str:
+    """Decode percent-encoding until stable, stripping query params."""
+    import re
+    url = re.sub(r"\?.*$", "", url.strip())
+    prev = None
+    while prev != url:
+        prev = url
+        url = unquote(url)
+    return url
 
 
 def get_connection() -> sqlite3.Connection:
@@ -21,30 +33,35 @@ def init_db() -> None:
     with get_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS articles (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                profile     TEXT    NOT NULL DEFAULT '',
-                title       TEXT    NOT NULL,
-                url         TEXT    NOT NULL UNIQUE,
-                published   TEXT,           -- ISO date string YYYY-MM-DD or raw text
-                content     TEXT,           -- full article text
-                fetched_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile      TEXT    NOT NULL DEFAULT '',
+                title        TEXT    NOT NULL,
+                url          TEXT    NOT NULL UNIQUE,
+                published    TEXT,
+                content      TEXT,
+                content_type TEXT    NOT NULL DEFAULT 'text',
+                fetched_at   TEXT    NOT NULL DEFAULT (datetime('now'))
             )
         """)
         conn.commit()
 
         cols = [r[1] for r in conn.execute("PRAGMA table_info(articles)").fetchall()]
 
-        # Migrate: add content column if missing
         if "content" not in cols:
             conn.execute("ALTER TABLE articles ADD COLUMN content TEXT")
             conn.commit()
 
-        # Migrate: add profile column if missing, backfill existing rows
         if "profile" not in cols:
             conn.execute("ALTER TABLE articles ADD COLUMN profile TEXT NOT NULL DEFAULT ''")
             conn.execute(
                 "UPDATE articles SET profile = ? WHERE profile = ''",
                 (DEFAULT_PROFILE,),
+            )
+            conn.commit()
+
+        if "content_type" not in cols:
+            conn.execute(
+                "ALTER TABLE articles ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'"
             )
             conn.commit()
 
@@ -57,6 +74,7 @@ def upsert_article(
     content: Optional[str] = None,
 ) -> bool:
     """Insert or update an article. Returns True if it was a new record."""
+    url = _norm_url(url)   # always store the clean, decoded URL
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM articles WHERE url = ?", (url,)
@@ -81,14 +99,107 @@ def upsert_article(
             return True
 
 
-def update_content(url: str, content: str) -> None:
-    """Store fetched article text for an existing record."""
+def update_content(url: str, content: str, content_type: str = "html") -> None:
+    """Store fetched article content. content_type: 'html' or 'text'."""
+    url = _norm_url(url)
     with get_connection() as conn:
         conn.execute(
-            "UPDATE articles SET content=? WHERE url=?",
-            (content, url),
+            "UPDATE articles SET content=?, content_type=? WHERE url=?",
+            (content, content_type, url),
         )
         conn.commit()
+
+
+def update_published(url: str, published: str) -> None:
+    """Store the publication date for an article."""
+    url = _norm_url(url)
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE articles SET published=? WHERE url=? AND (published IS NULL OR published='')",
+            (published, url),
+        )
+        conn.commit()
+
+
+def get_articles_missing_date() -> list[sqlite3.Row]:
+    """Return articles that have no published date stored."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, title, url, profile FROM articles "
+            "WHERE published IS NULL OR published = '' "
+            "ORDER BY profile, fetched_at DESC"
+        ).fetchall()
+
+
+def get_article_by_id(article_id: int):
+    """Return a single article row by ID."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, profile, title, url, published, content, content_type, fetched_at "
+            "FROM articles WHERE id=?",
+            (article_id,),
+        ).fetchone()
+
+
+def get_articles_needing_html_refresh() -> list[sqlite3.Row]:
+    """Return articles that have plain-text content and need re-fetching as HTML."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, title, url, profile FROM articles "
+            "WHERE content IS NOT NULL AND content != '' AND content_type = 'text' "
+            "ORDER BY profile, published DESC"
+        ).fetchall()
+
+
+def get_articles_by_ids(ids: list[int]) -> list[sqlite3.Row]:
+    """Return full article rows for a list of IDs, preserving the input order."""
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, profile, title, url, published, content FROM articles "
+            f"WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    # Restore the caller's requested order
+    row_by_id = {r["id"]: r for r in rows}
+    return [row_by_id[i] for i in ids if i in row_by_id]
+
+
+def get_articles_by_profile_all(profile: str) -> list[sqlite3.Row]:
+    """Return all articles for a profile, ordered by published desc."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT profile, title, url, published, content FROM articles "
+            "WHERE profile=? ORDER BY published DESC",
+            (profile,),
+        ).fetchall()
+
+
+def get_most_recent_articles(limit: int = 10, profile: Optional[str] = None) -> list[sqlite3.Row]:
+    """Return the N most recent articles, optionally filtered by profile."""
+    with get_connection() as conn:
+        if profile:
+            return conn.execute(
+                "SELECT profile, title, url, published, content FROM articles "
+                "WHERE profile=? ORDER BY published DESC LIMIT ?",
+                (profile, limit),
+            ).fetchall()
+        return conn.execute(
+            "SELECT profile, title, url, published, content FROM articles "
+            "ORDER BY published DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+
+def get_all_articles() -> list[sqlite3.Row]:
+    """Return every article in the DB, ordered by profile then published desc."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT profile, title, url, published, content FROM articles "
+            "ORDER BY profile ASC, published DESC",
+        ).fetchall()
 
 
 def get_articles_without_content(profile: str) -> list[sqlite3.Row]:
@@ -105,12 +216,14 @@ def list_articles(profile: str, order: str = "title") -> list[sqlite3.Row]:
     with get_connection() as conn:
         if order == "date":
             rows = conn.execute(
-                "SELECT title, url, published, fetched_at FROM articles WHERE profile=? ORDER BY published DESC",
+                "SELECT id, title, url, published, fetched_at FROM articles "
+                "WHERE profile=? ORDER BY published DESC",
                 (profile,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT title, url, published, fetched_at FROM articles WHERE profile=? ORDER BY LOWER(title) ASC",
+                "SELECT id, title, url, published, fetched_at FROM articles "
+                "WHERE profile=? ORDER BY LOWER(title) ASC",
                 (profile,),
             ).fetchall()
     return rows
@@ -153,7 +266,7 @@ def search_articles(query: str, profile: Optional[str] = None) -> list[sqlite3.R
         params = [profile] + params
 
     sql = f"""
-        SELECT profile, title, url, published, content
+        SELECT id, profile, title, url, published, content
         FROM articles
         WHERE {where}
         ORDER BY profile ASC, published DESC
@@ -168,6 +281,26 @@ def count_articles(profile: str) -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM articles WHERE profile=?", (profile,)
         ).fetchone()[0]
+
+
+def get_known_urls_by_profile() -> dict[str, set[str]]:
+    """Return {profile: set(url)} for all articles in the DB (URLs already normalised)."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT profile, url FROM articles").fetchall()
+    result: dict[str, set[str]] = {}
+    for row in rows:
+        result.setdefault(row["profile"], set()).add(row["url"])
+    return result
+
+
+def get_latest_fetched_at(profile: str) -> Optional[str]:
+    """Return the most recent fetched_at timestamp for a profile, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(fetched_at) as latest FROM articles WHERE profile = ?",
+            (profile,),
+        ).fetchone()
+    return row["latest"] if row else None
 
 
 def list_profiles() -> list[str]:

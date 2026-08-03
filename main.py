@@ -27,13 +27,16 @@ from db import (
     init_db,
     upsert_article,
     update_content,
+    update_published,
     get_articles_without_content,
+    get_known_urls_by_profile,
+    get_latest_fetched_at,
     list_articles,
     search_articles,
     count_articles,
     list_profiles,
 )
-from scraper import scrape_articles, fetch_articles_text
+from scraper import scrape_articles, fetch_articles_text, check_for_updates, LinkedInSession
 
 SEPARATOR = "─" * 72
 
@@ -48,10 +51,15 @@ def prompt_credentials() -> tuple[str, str]:
 
 
 def first_n_lines(text: str, n: int = 3) -> str:
-    """Return the first n non-empty lines of text."""
+    """Return the first n non-empty lines of text, stripping HTML tags if present."""
     if not text:
         return "(no text stored — run --fetch-content to download article text)"
-    lines = [l for l in text.splitlines() if l.strip()]
+    # Strip HTML tags if content is HTML
+    if text.strip().startswith("<"):
+        import re
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
     snippet = "\n".join(lines[:n])
     if len(lines) > n:
         snippet += f"\n  … ({len(lines) - n} more lines)"
@@ -73,14 +81,154 @@ def print_article_result(row, index: int, lines: int = 3, show_profile: bool = F
     print()
 
 
+# ── Startup update check ───────────────────────────────────────────────────────
+
+def startup_check() -> None:
+    """
+    On startup:
+      1. Check all known profiles for new articles (incremental — stops early).
+      2. If new articles found, offer to sync them.
+      3. After syncing (or if articles already existed without content),
+         automatically fetch text for any articles missing it — all in the
+         same login session so the user only enters credentials once.
+    """
+    profiles = list_profiles()
+    if not profiles:
+        return
+
+    # Count articles missing content across all profiles
+    missing_content = []
+    for p in profiles:
+        missing_content.extend(get_articles_without_content(p))
+
+    # Show status
+    print(f"\nChecking for new articles on {len(profiles)} profile(s):")
+    for p in profiles:
+        last = get_latest_fetched_at(p) or "never"
+        n_missing = sum(1 for r in missing_content if True)  # counted below per profile
+        print(f"  • {p}  (last synced: {last})")
+    if missing_content:
+        print(f"  {len(missing_content)} article(s) across all profiles are missing text.")
+    print("\n(LinkedIn credentials required)\n")
+
+    try:
+        email, password = prompt_credentials()
+    except (KeyboardInterrupt, EOFError):
+        print("\nSkipping startup check.")
+        return
+
+    print()
+    known_urls = get_known_urls_by_profile()
+
+    # Open a single browser session for everything
+    try:
+        with LinkedInSession(verbose=True) as sess:
+            sess.login(email, password)
+
+            # ── Step 1: check for new articles ────────────────────────────
+            new_by_profile: dict = {}
+            for profile in profiles:
+                print(f"  Checking '{profile}'…")
+                try:
+                    profile_known = known_urls.get(profile, set())
+                    articles = sess.scrape_profile(profile, known_urls=profile_known)
+                    if articles:
+                        new_by_profile[profile] = articles
+                except Exception as e:
+                    print(f"  ⚠  Could not check '{profile}': {e}")
+
+            # ── Step 2: offer to sync new articles ────────────────────────
+            synced_new_urls: list[str] = []
+            if not new_by_profile:
+                print("\n✔  All profiles are up to date.")
+            else:
+                print()
+                for profile, new_articles in new_by_profile.items():
+                    print(f"  {profile}: {len(new_articles)} new article(s)")
+                    for art in new_articles:
+                        print(f"    • {art['title'][:65]}")
+                print()
+                try:
+                    answer = input("Sync now? [Y/n] ").strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    answer = "n"
+
+                if answer in ("", "y", "yes"):
+                    for profile, new_articles in new_by_profile.items():
+                        added = 0
+                        for art in new_articles:
+                            if upsert_article(profile, art["title"], art["url"], art.get("published")):
+                                added += 1
+                                synced_new_urls.append(art["url"])
+                        print(f"  ✔  '{profile}': {added} article(s) added.")
+                    print()
+                else:
+                    print("Skipped.\n")
+
+            # ── Step 3: fetch missing content ─────────────────────────────
+            # Re-query after potential sync to include newly added articles
+            all_missing: list = []
+            for p in profiles:
+                all_missing.extend(get_articles_without_content(p))
+
+            if not all_missing:
+                return
+
+            print(f"{len(all_missing)} article(s) need text fetching.")
+            try:
+                answer = input("Fetch text now? [Y/n] ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                answer = "n"
+
+            if answer not in ("", "y", "yes"):
+                print("Skipped. Run --fetch-content later to download article text.\n")
+                return
+
+            urls = [r["url"] for r in all_missing]
+            title_map = {r["url"]: r["title"] for r in all_missing}
+            fetched = 0
+
+            def on_fetched(url, result, index, total):
+                nonlocal fetched
+                html = result.get("html", "") if isinstance(result, dict) else result
+                published = result.get("published") if isinstance(result, dict) else None
+                title = title_map.get(url, url)
+                if html:
+                    update_content(url, html, content_type="html")
+                    if published:
+                        update_published(url, published)
+                    fetched += 1
+                    print(f"  ✔  [{index}/{total}] {title[:60]}")
+                else:
+                    print(f"  ⚠  [{index}/{total}] No text — {title[:60]}")
+
+            sess.fetch_texts(urls, on_fetched=on_fetched)
+            print(f"\n✔  Text fetched for {fetched}/{len(urls)} article(s).\n")
+
+    except Exception as e:
+        print(f"\n⚠  Startup check failed: {e}")
+
+
 # ── Commands ───────────────────────────────────────────────────────────────────
 
 def cmd_update(profile: str) -> None:
     email, password = prompt_credentials()
     print()
 
-    articles = scrape_articles(email, password, profile=profile, verbose=True)
+    # Pass known URLs so scraping stops at the first already-seen article
+    known = get_known_urls_by_profile().get(profile, set())
+    is_first_sync = len(known) == 0
 
+    articles = scrape_articles(
+        email, password,
+        profile=profile,
+        known_urls=known if not is_first_sync else None,
+        verbose=True,
+    )
+
+    if not articles and not is_first_sync:
+        print(f"\n✔  '{profile}' is already up to date.")
+        return
     if not articles:
         print("\nNo articles found. The page structure may have changed, or login failed.")
         sys.exit(1)
@@ -110,11 +258,15 @@ def cmd_fetch_content(profile: str) -> None:
     urls = [row["url"] for row in pending]
     title_map = {row["url"]: row["title"] for row in pending}
 
-    def on_fetched(url, text, index, total):
+    def on_fetched(url, result, index, total):
+        html = result.get("html", "") if isinstance(result, dict) else result
+        published = result.get("published") if isinstance(result, dict) else None
         title = title_map.get(url, url)
-        if text:
-            update_content(url, text)
-            print(f"  ✔  {len(text.splitlines())} lines stored — {title[:60]}")
+        if html:
+            update_content(url, html, content_type="html")
+            if published:
+                update_published(url, published)
+            print(f"  ✔  stored — {title[:60]}")
         else:
             print(f"  ⚠  No text retrieved — {title[:60]}")
 
@@ -231,9 +383,9 @@ def main() -> None:
         metavar="PROFILE",
         default=None,
         help=(
-            "Target a different LinkedIn profile (e.g. --other ctaurion). "
+            "Target a different LinkedIn profile (e.g. --other username). "
             "Affects --update, --fetch-content, --list, --count, and --search. "
-            "Without this flag, defaults to your own profile (cesarbrod)."
+            "Without this flag, defaults to your own profile."
         ),
     )
 
@@ -247,6 +399,11 @@ def main() -> None:
         args.list = True
 
     init_db()
+
+    # ── Startup update check ───────────────────────────────────────────────
+    # Run when there are known profiles and the user isn't already syncing.
+    if not args.update and list_profiles():
+        startup_check()
 
     if args.update:
         cmd_update(profile)
