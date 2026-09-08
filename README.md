@@ -123,8 +123,8 @@ python fix_titles.py --dry-run
 All operations support multiple LinkedIn profiles. Use `--other PROFILE` in the CLI or the profile selector in the web interface.
 
 ```bash
-python main.py --update --other ctaurion
-python main.py --list --other ctaurion
+python main.py --update --other cesarbrod
+python main.py --list --other cesarbrod
 ```
 
 ---
