@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ article.title }}{% endblock %}
+
+{% block content %}
+<article class="article-reader">
+
+  <div class="article-reader-meta">
+    <a href="{{ url_for('article_list', profile=article.profile) }}" class="back-link">
+      ← {{ article.profile }}
+    </a>
+    <span class="article-reader-date">{{ article.published or 'unknown date' }}</span>
+    <a href="{{ article.url }}" target="_blank" rel="noopener" class="article-reader-source">
+      View on LinkedIn ↗
+    </a>
+  </div>
+
+  <h1 class="article-reader-title">{{ article.title }}</h1>
+
+  {% if article.banner_image %}
+  <img src="{{ article.banner_image }}" alt="Article banner" class="article-banner-img" />
+  {% endif %}
+
+  <div class="article-reader-body">
+    {% if article.content %}
+      {% if article.content_type == 'html' %}
+        {{ article.content | safe }}
+      {% else %}
+        {# Plain text fallback — render as paragraphs #}
+        {% for para in article.content.split('\n\n') %}
+          {% if para.strip() %}
+            <p>{{ para.strip() }}</p>
+          {% endif %}
+        {% endfor %}
+        <p class="article-reader-notice">
+          ⚠ This article is stored as plain text.
+          {% if has_credentials %}
+            <a href="{{ url_for('index') }}">Re-fetch as HTML</a> from the dashboard.
+          {% endif %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p class="article-reader-notice">
+        No content stored yet.
+        {% if has_credentials %}
+          Use <a href="{{ url_for('index') }}">Fetch text</a> from the dashboard.
+        {% endif %}
+      </p>
+    {% endif %}
+  </div>
+
+</article>
+{% endblock %}

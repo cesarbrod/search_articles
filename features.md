@@ -144,6 +144,11 @@ CREATE TABLE articles (
 4. CSS class hints (`.publish-date`, `.authored-date`, `[class*="date"]`, etc.)
 5. Brute-force scan of all short visible text nodes
 
+**Date parsing improvements (2026-09):**
+- `_parse_date()` now strips common prefixes ("Published", "Updated", "Posted", "Created", "Date") before parsing
+- Handles formats like "Published Aug 25, 2026" → "2026-08-25"
+- Supports YYYY-MM-DD, YYYY-MM, and "Month Day, Year" formats
+
 ### Content storage (offline-first HTML)
 
 - Images embedded as base64 data URIs — fully offline-readable
@@ -154,9 +159,12 @@ CREATE TABLE articles (
 
 ### ePub generation (`epub_generator.py`)
 
-- Improved CSS for `<pre>` and `<code>` blocks (monospace, word-wrap, background) — also applied to `code` inline elements
+- **Code block styling (updated 2026-09-02):** Dark blue background (#1a3a52) with white bold text for better readability and print suitability
+- Proper word wrapping for code blocks (`white-space: pre-wrap`, `word-wrap: break-word`)
 - Code-like blocks detected via LinkedIn class names and `white-space:pre` styles are converted to `<pre>` tags before export
-- Banner image (article hero image) downloaded and placed below the title in each chapter
+- **Banner image extraction (improved 2026-09-02):** Multi-level filtering (URL patterns + CSS classes + parent container classes) for robust detection across different LinkedIn HTML structures
+- Banner images downloaded and placed below the title in each chapter (`.article-banner` CSS class)
+- Handles images in `<figure>` elements with `reader-cover-image` classes
 - Image filenames scoped per article (`art_{idx}_img_{n}.ext`, `art_{idx}_banner.ext`) — no collisions in multi-article ePubs
 - Scopes: search results, all by author, most recent N, everything
 
@@ -164,14 +172,31 @@ CREATE TABLE articles (
 
 ## Utilities
 
+### `fix_missing_dates.py` (NEW)
+Auto-extracts publication dates from stored HTML content. **No login required** — works with HTML already in the database.
+
+```bash
+python fix_missing_dates.py --auto          # auto-extract only
+python fix_missing_dates.py --interactive   # prompt for dates that can't be auto-extracted (default)
+python fix_missing_dates.py                 # same as --interactive
+```
+
+Strategies (applied to stored HTML):
+1. `<time>` tags with `datetime` attribute or visible text
+2. Meta tags (`article:published_time`, etc.)
+3. Common date CSS classes
+4. Brute-force "Published Month Day, Year" pattern search
+
 ### `fix_dates.py`
-Backfills missing publication dates. **Requires LinkedIn login** (dates are JS-rendered).
+Backfills missing publication dates by re-fetching from LinkedIn. **Requires LinkedIn login** (dates are JS-rendered).
 
 ```bash
 python fix_dates.py              # fix articles missing a date
 python fix_dates.py --all        # re-check every article
 python fix_dates.py --dry-run    # preview only
 ```
+
+**Note:** Use `fix_missing_dates.py` first (no login required). Only use `fix_dates.py` if auto-extraction fails.
 
 ### `fix_titles.py`
 Fixes titles that contain snippet text (no login required).

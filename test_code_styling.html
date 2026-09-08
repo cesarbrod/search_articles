@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Code Block Styling Test</title>
+    <style>
+        body {
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1em;
+            line-height: 1.7;
+            margin: 1.5em 2em;
+            color: #1a1a1a;
+            background: #ffffff;
+        }
+        h1 { font-size: 1.6em; margin-bottom: 0.5em; }
+        h2 { font-size: 1.2em; margin-top: 1.5em; color: #0a66c2; }
+        p  { margin: 0.6em 0; }
+        
+        /* NEW STYLING - Dark blue background with white bold text */
+        pre {
+            font-family: "Courier New", "Lucida Console", monospace;
+            font-size: 0.82em;
+            background: #1a3a52;
+            color: #ffffff;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            padding: 0.8em 1em;
+            margin: 1em 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            word-break: break-all;
+            overflow-wrap: break-word;
+            line-height: 1.45;
+        }
+        code {
+            font-family: "Courier New", "Lucida Console", monospace;
+            font-size: 0.85em;
+            background: #1a3a52;
+            color: #ffffff;
+            font-weight: bold;
+            padding: 0.15em 0.4em;
+            border-radius: 3px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            word-break: break-all;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            font-size: inherit;
+            border-radius: 0;
+            color: inherit;
+            font-weight: inherit;
+        }
+        
+        .comparison {
+            background: #f5f5f5;
+            padding: 1em;
+            margin: 1em 0;
+            border-left: 4px solid #0a66c2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Code Block Styling Test for ePub Export</h1>
+    
+    <p>This page demonstrates the new code block styling for LinkedIn Articles ePub exports.</p>
+
+    <h2>Requirements</h2>
+    <div class="comparison">
+        <strong>Before:</strong> Code blocks had light gray background (#f5f5f5) with default text color<br>
+        <strong>After:</strong> Code blocks have dark blue background (#1a3a52) with white bold text<br>
+        <strong>Purpose:</strong> Better readability and suitability for printing
+    </div>
+
+    <h2>Test Case 1: Multi-line Code Block</h2>
+    <p>This is a typical code block that might appear in a LinkedIn article:</p>
+    
+    <pre><code>def calculate_fibonacci(n):
+    if n <= 1:
+        return n
+    return calculate_fibonacci(n-1) + calculate_fibonacci(n-2)
+
+# Example usage
+for i in range(10):
+    print(f"F({i}) = {calculate_fibonacci(i)}")</code></pre>
+
+    <h2>Test Case 2: Long Line Code Block (Testing Word Wrap)</h2>
+    <p>Code blocks should wrap long lines properly, not overflow:</p>
+    
+    <pre><code>const veryLongFunctionName = (param1, param2, param3, param4, param5, param6, param7, param8) => {
+    return param1 + param2 + param3 + param4 + param5 + param6 + param7 + param8;
+};
+
+// This is a very long comment that should also wrap properly when displayed in the ePub reader and not cause any horizontal scrolling issues</code></pre>
+
+    <h2>Test Case 3: Inline Code</h2>
+    <p>You can also use inline code like <code>console.log("Hello World")</code> within regular paragraphs. The styling should be consistent but not disrupt the text flow.</p>
+
+    <h2>Test Case 4: SQL Query</h2>
+    <pre><code>SELECT 
+    users.id,
+    users.name,
+    COUNT(articles.id) as article_count
+FROM users
+LEFT JOIN articles ON users.id = articles.author_id
+WHERE users.active = true
+GROUP BY users.id, users.name
+HAVING article_count > 5
+ORDER BY article_count DESC
+LIMIT 10;</code></pre>
+
+    <h2>Test Case 5: JSON Data</h2>
+    <pre><code>{
+  "name": "LinkedIn Articles Scraper",
+  "version": "2.0",
+  "features": [
+    "Article scraping",
+    "Full-text search",
+    "ePub export",
+    "Offline reading"
+  ],
+  "config": {
+    "codeBlocks": {
+      "background": "#1a3a52",
+      "textColor": "#ffffff",
+      "fontWeight": "bold"
+    }
+  }
+}</code></pre>
+
+    <h2>Test Case 6: Mixed Content</h2>
+    <p>Here's a paragraph explaining that you should use the <code>fetch_article_rich()</code> method to download article content. This method returns a dictionary with keys like <code>html</code>, <code>images</code>, and <code>banner_image</code>.</p>
+
+    <pre><code>result = sess.fetch_article_rich(article_url)
+print(f"HTML length: {len(result['html'])}")
+print(f"Image count: {len(result['images'])}")
+if result['banner_image']:
+    print("Banner image found!")</code></pre>
+
+    <h2>Visual Check</h2>
+    <p><strong>✓ Checklist:</strong></p>
+    <ul>
+        <li>Code blocks have dark blue background (#1a3a52)</li>
+        <li>Text is white and bold</li>
+        <li>Long lines wrap properly (no horizontal scroll)</li>
+        <li>Inline code matches block code styling</li>
+        <li>Text is readable when printed or viewed on e-readers</li>
+    </ul>
+
+    <h2>Notes</h2>
+    <p>This styling will be embedded in the ePub CSS and applied to all <code>&lt;pre&gt;</code> and <code>&lt;code&gt;</code> elements in exported ePub files. The original LinkedIn article content is converted to use standard HTML <code>&lt;pre&gt;</code> tags during the scraping process.</p>
+
+</body>
+</html>
