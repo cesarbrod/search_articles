@@ -287,7 +287,10 @@ def _add_image_paragraph(doc: Document, data: bytes, width):
 
 def _add_inline_runs(paragraph, element, link_url: Optional[str] = None):
     """Append runs for element's inline content (recurses into children)."""
+    from bs4 import Comment as _CM
     for child in element.children:
+        if isinstance(child, _CM):
+            continue  # LinkedIn's empty <!-- --> separators: never a space run
         if isinstance(child, NavigableString):
             # Collapse whitespace: a raw "\n" would become a <w:br/>
             # (blank line) via add_run. Keep at most one separating space,
@@ -329,7 +332,10 @@ def _add_inline_runs(paragraph, element, link_url: Optional[str] = None):
 
 def _add_quote_runs(paragraph, el):
     """Flatten a <blockquote> into one paragraph: inline runs + breaks."""
+    from bs4 import Comment as _CM
     for child in el.children:
+        if isinstance(child, _CM):
+            continue
         if isinstance(child, NavigableString):
             text = " ".join(str(child).split())
             if text:
@@ -396,6 +402,63 @@ _CLOSING_PUNCT = ",.;:!?%)]}'\"\"''"
 _OPENING_PUNCT = "([{‘“\""
 
 
+_LINKEDIN_BASE = "https://www.linkedin.com"
+
+
+def _strip_linkedin_comments(soup):
+    """Remove LinkedIn's empty <!-- --> separators between inline nodes.
+
+    A Comment stringifies to a single space, which _add_inline_runs would
+    otherwise emit as a space run — the 'Name .' / 'bold .' gap.
+
+    Walks .descendants manually: find_all(string=...) never descends into
+    <pre> in BeautifulSoup, so code-block comments would survive it.
+    """
+    from bs4 import Comment as _CM
+    for el in list(soup.descendants):
+        if isinstance(el, _CM):
+            el.extract()
+
+
+def _absolutize_links(soup):
+    """Rewrite relative LinkedIn hrefs (/in/..., ../in/..., ../../in/...)
+    as absolute https://www.linkedin.com/... URLs so hyperlinks in the
+    book resolve correctly outside linkedin.com."""
+    from urllib.parse import urljoin
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        low = href.lower()
+        if low.startswith(("#", "mailto:", "tel:", "data:", "javascript:")):
+            continue
+        if low.startswith(("http://", "https://")):
+            continue
+        if href.startswith("//"):
+            a["href"] = "https:" + href
+            continue
+        a["href"] = urljoin(_LINKEDIN_BASE + "/", href)
+
+
+def _tighten_punct_text(soup):
+    """Collapse spaces before closing punctuation inside text nodes
+    (e.g. 'operacional .' → 'operacional.'). Skips pre/code (verbatim)
+    and whitespace-only nodes."""
+    from bs4 import Comment as _CM
+    for s in soup.find_all(string=True):
+        if isinstance(s, _CM):
+            continue
+        if s.parent is not None and s.parent.name in ("pre", "code"):
+            continue
+        t = str(s)
+        if not t or not t.strip():
+            continue
+        new = re.sub(r"\s+([%s])" % re.escape(_CLOSING_PUNCT), r"\1", t)
+        new = re.sub(r"([%s])\s+" % re.escape(_OPENING_PUNCT), r"\1", new)
+        if new != t:
+            s.replace_with(new)
+
+
 def _fix_punct_spacing(soup):
     """Drop whitespace-only nodes glued to punctuation across tag boundaries.
 
@@ -440,6 +503,9 @@ def _strip_edge_breaks(el):
 
 def _add_block(doc: Document, el, list_style: Optional[str] = None):
     """Convert one block-level bs4 element into docx content."""
+    from bs4 import Comment as _CM
+    if isinstance(el, _CM):
+        return  # never render comment separators as text
     name = getattr(el, "name", None)
     if name is None:  # bare string
         text = str(el).strip()
@@ -534,10 +600,16 @@ def _add_body_html(doc: Document, content: str):
         return
     if content.strip().startswith("<"):
         soup = BeautifulSoup(content, "html.parser")
+        _strip_linkedin_comments(soup)
+        _absolutize_links(soup)
         _lift_blocks(soup)
         _fix_punct_spacing(soup)
+        _tighten_punct_text(soup)
         root = soup.body or soup
+        from bs4 import Comment as _CM
         for child in list(root.children):
+            if isinstance(child, _CM):
+                continue
             try:
                 _add_block(doc, child)
             except Exception:

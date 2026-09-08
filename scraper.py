@@ -422,6 +422,65 @@ def _norm_url(url: str) -> str:
     return url
 
 
+_LINKEDIN_BASE = "https://www.linkedin.com"
+
+
+def _strip_linkedin_comments(soup) -> None:
+    """Remove all HTML comments (LinkedIn emits empty <!-- --> between inline
+    nodes and <!----> inside code blocks). Left in place they serialize back
+    into stored HTML and — worse — downstream DOCX rendering treats a Comment
+    as a space run, producing 'Name .' / 'bold .' gaps before punctuation.
+
+    Walks .descendants manually: find_all(string=...) never descends into
+    <pre> in BeautifulSoup, so code-block comments would survive it."""
+    from bs4 import Comment as _CM
+    for el in list(soup.descendants):
+        if isinstance(el, _CM):
+            el.extract()
+
+
+def _absolutize_links(soup) -> None:
+    """Rewrite relative LinkedIn hrefs (/in/..., ../in/..., ../../in/...) as
+    absolute https://www.linkedin.com/... URLs so exported books (EPUB/DOCX/
+    PDF) and the offline reader resolve person/profile links correctly
+    outside linkedin.com."""
+    from urllib.parse import urljoin
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        low = href.lower()
+        if low.startswith(("#", "mailto:", "tel:", "data:", "javascript:")):
+            continue
+        if low.startswith(("http://", "https://")):
+            continue
+        if href.startswith("//"):
+            a["href"] = "https:" + href
+            continue
+        a["href"] = urljoin(_LINKEDIN_BASE + "/", href)
+
+
+def _tighten_punct_text(soup) -> None:
+    """Collapse spaces before closing punctuation inside text nodes
+    (e.g. 'operacional .' → 'operacional .'). Skips pre/code (verbatim) and
+    whitespace-only nodes (handled by tag-boundary fixers downstream)."""
+    from bs4 import NavigableString as _NS, Comment as _CM
+    _CLOSE = ",.;:!?%)]}'\"”’"
+    _OPEN = "([{‘“„"
+    for s in soup.find_all(string=True):
+        if isinstance(s, _CM):
+            continue
+        if s.parent is not None and s.parent.name in ("pre", "code"):
+            continue
+        t = str(s)
+        if not t or not t.strip():
+            continue
+        new = re.sub(r"\s+([%s])" % re.escape(_CLOSE), r"\1", t)
+        new = re.sub(r"([%s])\s+" % re.escape(_OPEN), r"\1", new)
+        if new != t:
+            s.replace_with(new)
+
+
 def _extract_title(anchor) -> str:
     """Extract the article title from a listing-page anchor element."""
     title = anchor.get_attribute("aria-label") or ""
@@ -540,52 +599,91 @@ def _extract_article_rich(page: Page) -> dict:
     html = page.content()
     soup = BeautifulSoup(html, "html.parser")
 
-    for tag in soup(["script", "style", "noscript", "nav", "header", "footer", "aside"]):
-        tag.decompose()
-
-    # ── Banner image (article hero, lives outside the body content area) ──
+    # ── Banner image FIRST (before removing anything) ──────────────────────
     banner_image = None
-    # Priority order: most specific first. Filter out profile photos by checking
-    # that the src contains 'article-cover' or 'article-inline'.
-    banner_selectors = [
-        "[class*='cover'] img",
-        "[class*='banner'] img",
-        "[class*='hero'] img",
-        ".reader-article-header__hero-image img",
-        ".article-header__image img",
-        "header img",
-    ]
-    for sel in banner_selectors:
-        for banner_el in soup.select(sel):
-            src = banner_el.get("src") or banner_el.get("data-src") or ""
-            # Skip profile photos and avatars — article cover URLs contain
-            # 'article-cover', 'article-inline', or 'article-inline-photo'
-            if not src or src.startswith("data:"):
-                continue
+    
+    # Look for the specific LinkedIn banner image class
+    banner_img = soup.select_one(".reader-cover-image__img")
+    
+    if banner_img:
+        src = banner_img.get("src") or banner_img.get("data-src") or ""
+        
+        if src and not src.startswith("data:"):
+            # Fix relative URLs
             if src.startswith("//"):
                 src = "https:" + src
             elif src.startswith("/"):
                 src = "https://www.linkedin.com" + src
-            # Only accept images that look like article covers
-            if ("article-cover" in src or "article-inline" in src
-                    or "cover_image" in src or "cover-image" in src):
-                try:
-                    response = page.request.get(src, timeout=10000)
-                    if response.ok:
-                        mime = response.headers.get("content-type", "image/jpeg").split(";")[0]
+            
+            # Try to fetch the banner
+            try:
+                response = page.request.get(src, timeout=10000)
+                if response.ok:
+                    content_type = response.headers.get("content-type", "image/jpeg")
+                    mime = content_type.split(";")[0]
+                    
+                    if mime.startswith("image/"):
                         ext = {"image/jpeg": "jpg", "image/png": "png",
                                "image/gif": "gif", "image/webp": "webp",
                                "image/svg+xml": "svg"}.get(mime, "jpg")
+                        
                         banner_image = {
                             "data": response.body(),
                             "mime": mime,
                             "epub_name": f"banner.{ext}",
                         }
-                except Exception:
-                    pass
-                break
-        if banner_image:
-            break
+            except Exception:
+                pass
+    
+    # Fallback: try other selectors if primary didn't work
+    if not banner_image:
+        fallback_selectors = [
+            ".article-cover-image__img",
+            "[class*='cover-image'] img",
+            "figure img:first-of-type",
+        ]
+        
+        for sel in fallback_selectors:
+            img = soup.select_one(sel)
+            if not img:
+                continue
+            
+            src = img.get("src") or img.get("data-src") or ""
+            if not src or src.startswith("data:"):
+                continue
+            
+            if src.startswith("//"):
+                src = "https:" + src
+            elif src.startswith("/"):
+                src = "https://www.linkedin.com" + src
+            
+            # Skip profile/avatar images
+            if any(pattern in src.lower() for pattern in ["profile", "avatar", "author"]):
+                continue
+            
+            try:
+                response = page.request.get(src, timeout=10000)
+                if response.ok:
+                    content_type = response.headers.get("content-type", "image/jpeg")
+                    mime = content_type.split(";")[0]
+                    
+                    if mime.startswith("image/"):
+                        ext = {"image/jpeg": "jpg", "image/png": "png",
+                               "image/gif": "gif", "image/webp": "webp",
+                               "image/svg+xml": "svg"}.get(mime, "jpg")
+                        
+                        banner_image = {
+                            "data": response.body(),
+                            "mime": mime,
+                            "epub_name": f"banner.{ext}",
+                        }
+                        break
+            except Exception:
+                continue
+    
+    # NOW remove scripts and styles (after banner extraction)
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "aside"]):
+        tag.decompose()
 
     body = (
         soup.select_one(".reader-article-content")
@@ -597,10 +695,17 @@ def _extract_article_rich(page: Page) -> dict:
     if not body:
         return {"html": "", "banner_image": banner_image, "images": []}
 
+    # ── Normalise inline content ──────────────────────────────────────
+    # Strip LinkedIn's empty <!-- --> separators (they become stray spaces
+    # downstream), absolutize person/profile links, and tighten spaces
+    # before punctuation — before any structural rewriting below.
+    _strip_linkedin_comments(body)
+    _absolutize_links(body)
+
     # ── Convert LinkedIn code blocks to <pre> ─────────────────────────────
     # LinkedIn renders code as <span class="white-space-pre"> elements.
     # Group consecutive such spans into a single <pre> block.
-    from bs4 import NavigableString
+    from bs4 import NavigableString, Comment
 
     for span in body.find_all("span", class_=lambda c: c and "white-space-pre" in " ".join(c)):
         # Replace each span with a <pre> containing its text content
@@ -614,6 +719,20 @@ def _extract_article_rich(page: Page) -> dict:
         classes = " ".join(el.get("class", []))
         if ("white-space: pre" in style or "white-space:pre" in style) and el.name not in ("pre", "code"):
             el.name = "pre"
+    
+    # ── Clean up <code> tags ─────────────────────────────────────────────
+    # LinkedIn adds HTML comments (<!---->)  inside <code> tags
+    # Remove these comments and ensure clean text
+    for code_tag in body.find_all("code"):
+        # Remove HTML comments from code tags
+        for comment in code_tag.find_all(string=lambda text: isinstance(text, Comment)):
+            comment.extract()
+        
+        # Clean up the text content (strip extra whitespace from comments)
+        text = code_tag.get_text()
+        if text:
+            code_tag.clear()
+            code_tag.string = text
 
     images = []
     img_counter = 0
@@ -655,6 +774,8 @@ def _extract_article_rich(page: Page) -> dict:
             if attr not in allowed:
                 del tag.attrs[attr]
 
+    _tighten_punct_text(body)
+
     return {"html": str(body), "banner_image": banner_image, "images": images}
 
 
@@ -685,6 +806,11 @@ def _extract_article_body(page: Page) -> str:
 
     if not body:
         return ""
+
+    # Same inline normalisation as the rich path: drop empty comments,
+    # absolutize person/profile links so offline exports resolve them.
+    _strip_linkedin_comments(body)
+    _absolutize_links(body)
 
     # ── Embed images as base64 data URIs ──────────────────────────────────
     for img in body.find_all("img"):
@@ -720,6 +846,8 @@ def _extract_article_body(page: Page) -> str:
         a["target"] = "_blank"
         a["rel"] = "noopener noreferrer"
 
+    _tighten_punct_text(body)
+
     return str(body)
 
 
@@ -727,6 +855,9 @@ def _parse_date(raw: str) -> Optional[str]:
     raw = raw.strip()
     if not raw:
         return None
+
+    # Strip common prefixes like "Published ", "Updated ", etc.
+    raw = re.sub(r"^(Published|Updated|Posted|Created|Date)[\s:]+", "", raw, flags=re.IGNORECASE).strip()
 
     # ISO datetime from <time datetime="..."> e.g. "2024-03-15T10:00:00.000Z"
     m = re.match(r"(\d{4}-\d{2}-\d{2})", raw)

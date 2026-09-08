@@ -137,6 +137,61 @@ def _text_to_html(text: str) -> str:
 _CLOSING_PUNCT = ",.;:!?%)]}'\"\"''"
 _OPENING_PUNCT = "([{‘“\""
 
+_LINKEDIN_BASE = "https://www.linkedin.com"
+
+
+def _strip_linkedin_comments(soup):
+    """Remove LinkedIn's empty <!-- --> separators between inline nodes.
+
+    Left in place they round-trip into stored/exported HTML and — in the
+    DOCX path — a Comment stringifies to a stray space run ('Name .').
+    Walks .descendants manually: find_all(string=...) never descends into
+    <pre> in BeautifulSoup, so code-block comments would survive it.
+    """
+    from bs4 import Comment as _CM
+    for el in list(soup.descendants):
+        if isinstance(el, _CM):
+            el.extract()
+
+
+def _absolutize_links(soup):
+    """Rewrite relative LinkedIn hrefs (/in/..., ../in/..., ../../in/...)
+    as absolute https://www.linkedin.com/... URLs so the book resolves
+    person/profile links correctly outside linkedin.com."""
+    from urllib.parse import urljoin
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        low = href.lower()
+        if low.startswith(("#", "mailto:", "tel:", "data:", "javascript:")):
+            continue
+        if low.startswith(("http://", "https://")):
+            continue
+        if href.startswith("//"):
+            a["href"] = "https:" + href
+            continue
+        a["href"] = urljoin(_LINKEDIN_BASE + "/", href)
+
+
+def _tighten_punct_text(soup):
+    """Collapse spaces before closing punctuation inside text nodes
+    (e.g. 'operacional .' → 'operacional.'). Skips pre/code (verbatim)
+    and whitespace-only nodes (handled by _fix_punct_spacing)."""
+    from bs4 import Comment as _CM
+    for s in soup.find_all(string=True):
+        if isinstance(s, _CM):
+            continue
+        if s.parent is not None and s.parent.name in ("pre", "code"):
+            continue
+        t = str(s)
+        if not t or not t.strip():
+            continue
+        new = re.sub(r"\s+([%s])" % re.escape(_CLOSING_PUNCT), r"\1", t)
+        new = re.sub(r"([%s])\s+" % re.escape(_OPENING_PUNCT), r"\1", new)
+        if new != t:
+            s.replace_with(new)
+
 
 def _fix_punct_spacing(soup):
     """Drop whitespace-only nodes glued to punctuation across tag boundaries.
@@ -184,10 +239,17 @@ def _decode_data_uri(src: str):
 
 
 def _clean_article_soup(soup):
-    """Shared LinkedIn HTML cleanup: code blocks, <code> tags, <pre> styling."""
+    """Shared LinkedIn HTML cleanup: comments, links, code blocks, <code>
+    tags, <pre> styling."""
     from bs4 import Comment as _Comment
 
+    # Order matters: drop empty <!-- --> separators first (they stringify
+    # to stray spaces), absolutize person/profile links for offline reading,
+    # then fix tag-boundary spacing and in-node spacing.
+    _strip_linkedin_comments(soup)
+    _absolutize_links(soup)
     _fix_punct_spacing(soup)
+    _tighten_punct_text(soup)
 
     # Convert LinkedIn <span class="white-space-pre"> to <pre>
     for span in soup.find_all("span", class_=lambda c: c and "white-space-pre" in " ".join(c)):
@@ -205,9 +267,11 @@ def _clean_article_soup(soup):
     # LinkedIn adds HTML comments (<!---->)  inside <code> tags
     # Remove these comments and ensure clean text
     for code_tag in soup.find_all("code"):
-        # Remove HTML comments from code tags
-        for comment in code_tag.find_all(string=lambda text: isinstance(text, _Comment)):
-            comment.extract()
+        # Remove HTML comments from code tags (descendant walk: find_all
+        # with a string filter never descends into <pre> in BeautifulSoup)
+        for el in list(code_tag.descendants):
+            if isinstance(el, _Comment):
+                el.extract()
 
         # Clean up the text content (strip extra whitespace from comments)
         text = code_tag.get_text()
@@ -473,6 +537,16 @@ def build_epub(
                     rich = sess.fetch_article_rich(art_url)
                     body_html = rich["html"]
                     images = rich["images"]
+
+                    # Live HTML bypasses the DB path: normalise it here so
+                    # fresh fetches get the same treatment (no empty-comment
+                    # gaps, absolute person links, tight punctuation).
+                    # Image refs (../images/…) are left untouched.
+                    if body_html and body_html.strip().startswith("<"):
+                        from bs4 import BeautifulSoup as _BS
+                        _live_soup = _BS(body_html, "html.parser")
+                        _clean_article_soup(_live_soup)
+                        body_html = str(_live_soup)
 
                     # Handle banner image (fetch from LinkedIn)
                     bi = rich.get("banner_image")

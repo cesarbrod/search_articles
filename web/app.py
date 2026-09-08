@@ -87,6 +87,53 @@ def make_snippet(content: str, n: int) -> tuple[list[str], int]:
     return lines[:n], max(0, len(lines) - n)
 
 
+def _clean_reader_html(content: str) -> str:
+    """Offline-reading normalisation for stored article HTML.
+
+    Mirrors the export generators: strip LinkedIn's empty <!-- -->
+    separators, absolutize relative person/profile links, and collapse
+    spaces before closing punctuation (outside pre/code).
+    """
+    try:
+        from bs4 import BeautifulSoup, Comment
+        from urllib.parse import urljoin
+    except ImportError:
+        return content
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        for el in list(soup.descendants):
+            if isinstance(el, Comment):
+                el.extract()
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
+            low = href.lower()
+            if low.startswith(("#", "mailto:", "tel:", "data:", "javascript:")):
+                continue
+            if low.startswith(("http://", "https://")):
+                continue
+            if href.startswith("//"):
+                a["href"] = "https:" + href
+                continue
+            a["href"] = urljoin("https://www.linkedin.com/", href)
+        _close = ",.;:!?%)]}'\"”’"
+        for s in soup.find_all(string=True):
+            if isinstance(s, Comment):
+                continue
+            if s.parent is not None and s.parent.name in ("pre", "code"):
+                continue
+            t = str(s)
+            if not t or not t.strip():
+                continue
+            new = re.sub(r"\s+([%s])" % re.escape(_close), r"\1", t)
+            if new != t:
+                s.replace_with(new)
+        return str(soup)
+    except Exception:
+        return content
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.route("/", methods=["GET"])
@@ -196,9 +243,15 @@ def article_view(article_id: int):
     if not row:
         flash("Article not found.", "error")
         return redirect(url_for("article_list"))
+    article = dict(row)
+    # Normalise stored HTML for offline reading: drop LinkedIn's empty
+    # <!-- --> separators, absolutize relative person/profile links
+    # (/in/..., ../../in/...) and tighten spaces before punctuation.
+    if article.get("content") and str(article["content"]).strip().startswith("<"):
+        article["content"] = _clean_reader_html(article["content"])
     return render_template(
         "article.html",
-        article=row,
+        article=article,
         has_credentials=credentials_stored(),
     )
 
