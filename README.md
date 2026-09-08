@@ -202,3 +202,9 @@ Articles are stored in `articles.db` (SQLite) in the project folder. Content is 
 - More reliable extraction across different article layouts
 
 See `SESSION_SUMMARY.md` for full details.
+
+---
+
+## License
+
+GNU General Public License v3.0 or later — see `LICENSE`.
