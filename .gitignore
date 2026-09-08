@@ -1,0 +1,7 @@
+articles.db
+venv/
+__pycache__/
+*.pyc
+export_*.epub
+export_*.docx
+export_*.pdf
