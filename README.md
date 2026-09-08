@@ -8,7 +8,6 @@ Scrapes LinkedIn articles into a local SQLite database. Provides both a **CLI** 
 
 ```bash
 cd linkedin_articles
-source ./venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium
 ```
@@ -35,10 +34,11 @@ python web_server.py --no-browser   # don't open the browser automatically
 | **Sync articles** | Dashboard → Sync button next to a profile |
 | **Add a new profile** | Dashboard → "Add / sync a profile" box |
 | **Fetch full article text** | Dashboard → "Fetch text" button |
+| **Refetch an updated article** | Dashboard → "Refetch an article" box (paste the link) |
 | **Migrate old articles to HTML** | Dashboard → "Migrate to HTML" button |
 | **Read an article offline** | List or Search → click the article title |
 | **Search articles** | Search page — supports AND, OR, exact phrases |
-| **Export to ePub** | Search page → Generate ePub panel |
+| **Export to ePub / DOCX / PDF** | Search page → Generate ebook panel |
 | **Select & reorder ePub articles** | Search page → Generate ePub → "Preview & reorder" |
 
 ### Credentials
@@ -57,6 +57,7 @@ python main.py [options]
 |---|---|
 | `-u` / `--update` | Fetch article list from LinkedIn and sync DB |
 | `--fetch-content` | Download full article HTML for articles missing it |
+| `--refetch [URL]` | Re-download one updated article (prompts for URL if omitted) |
 | `-l` / `--list` | List articles alphabetically (default action) |
 | `--list --by-date` | List articles by date, newest first |
 | `-c` / `--count` | Show total article count |
@@ -83,10 +84,18 @@ Every time the CLI starts (except with `--update`), it checks all known profiles
 ### Fix missing publication dates
 
 ```bash
-python fix_dates.py              # fix articles missing a date (requires login)
+# Auto-extract dates from stored HTML content (no login required)
+python fix_missing_dates.py --auto          # auto-extract only
+python fix_missing_dates.py --interactive   # prompt for dates that can't be auto-extracted
+python fix_missing_dates.py                 # interactive mode (default)
+
+# Re-fetch dates from LinkedIn (requires login)
+python fix_dates.py              # fix articles missing a date
 python fix_dates.py --all        # re-check every article
 python fix_dates.py --dry-run    # preview only, no changes saved
 ```
+
+**Note:** The new `fix_missing_dates.py` script tries to extract dates from HTML content already stored in the database, so it doesn't require logging in to LinkedIn. Use this first before falling back to `fix_dates.py` which requires authentication.
 
 ### Fix dirty titles
 
@@ -108,9 +117,18 @@ python main.py --list --other ctaurion
 
 ---
 
-## ePub export
+## Ebook export (ePub / DOCX / PDF)
 
-The web interface can export articles to ePub format with four scopes:
+The web interface (Search page → Generate ebook panel) can export articles
+in three formats:
+
+| Format | Best for |
+|---|---|
+| ePub | E-readers (Kindle, Kobo, Apple Books) |
+| DOCX | Editing in Google Docs / Word — import the file |
+| PDF | Printing and sharing (converted from the DOCX via LibreOffice) |
+
+It offers four scopes:
 
 | Scope | Description |
 |---|---|
@@ -121,11 +139,21 @@ The web interface can export articles to ePub format with four scopes:
 
 Before downloading, click **"Preview & reorder"** to see the article list, uncheck articles you want to exclude, and reorder them using the ↑↓ buttons or drag-and-drop.
 
+Generation is fully offline by default, using the already-downloaded text
+and images. Tick **"Fetch fresh images from LinkedIn"** only when you want
+to revisit every article on LinkedIn (requires sign-in, slower).
+
 Each chapter includes:
 - Article title
 - Banner image (hero image from the LinkedIn article), if present
 - Author, date, and link back to LinkedIn
 - Full article body with images, links, and properly formatted code blocks
+
+### Cover page
+
+Optionally upload a cover image in the export panel. Ideal: portrait
+JPG/PNG, **1600×2560 px** — the whole image is used as the cover, nothing
+overlaid on it. Without an upload, a plain title page is used instead.
 
 ---
 
@@ -141,3 +169,24 @@ Articles are stored in `articles.db` (SQLite) in the project folder. Content is 
 - LinkedIn may show a security challenge (CAPTCHA) during login. The tool will pause and ask you to resolve it in the browser window.
 - Run `fix_dates.py` once after migrating from an older version to backfill missing publication dates.
 - Run `fix_titles.py` if you see article titles that contain snippet text.
+
+---
+
+## Recent Improvements (2026-09-02)
+
+### ✅ Enhanced Date Extraction
+- Fixed date parsing to handle "Published MONTH DAY, YEAR" format
+- New `fix_missing_dates.py` tool for offline date extraction (no login required)
+- More robust date detection from various HTML structures
+
+### ✅ Improved Code Block Styling in ePub
+- Dark blue background (#1a3a52) with white bold text
+- Better readability for printing and e-readers
+- Proper word wrapping maintained
+
+### ✅ More Robust Banner Image Detection
+- Multi-level filtering (URL patterns + CSS classes + parent containers)
+- Handles various LinkedIn HTML structures
+- More reliable extraction across different article layouts
+
+See `SESSION_SUMMARY.md` for full details.

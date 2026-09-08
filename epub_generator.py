@@ -28,7 +28,7 @@ body {
 h1 { font-size: 1.6em; margin-bottom: 0.2em; line-height: 1.3; }
 h2 { font-size: 1.2em; margin-top: 1.5em; }
 h3 { font-size: 1.05em; margin-top: 1.2em; }
-p  { margin: 0.6em 0; }
+p  { margin: 0.6em 0; text-align: justify !important; }
 a  { color: #0a66c2; text-decoration: none; }
 img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
 .article-banner {
@@ -52,12 +52,21 @@ blockquote {
     margin: 1em 0;
     padding: 0.4em 1em;
     color: #444;
+    text-align: left;
+}
+figcaption {
+    text-align: center;
+    font-style: italic;
+    font-size: 0.85em;
+    color: #666;
 }
 pre {
     font-family: "Courier New", "Lucida Console", monospace;
     font-size: 0.82em;
-    background: #f5f5f5;
-    border: 1px solid #ddd;
+    background: #1a3a52;
+    color: #ffffff;
+    font-weight: bold;
+    border: none;
     border-radius: 4px;
     padding: 0.8em 1em;
     margin: 1em 0;
@@ -70,7 +79,9 @@ pre {
 code {
     font-family: "Courier New", "Lucida Console", monospace;
     font-size: 0.85em;
-    background: #f0f0f0;
+    background: #1a3a52;
+    color: #ffffff;
+    font-weight: bold;
     padding: 0.15em 0.4em;
     border-radius: 3px;
     white-space: pre-wrap;
@@ -82,6 +93,8 @@ pre code {
     padding: 0;
     font-size: inherit;
     border-radius: 0;
+    color: inherit;
+    font-weight: inherit;
 }
 hr { border: none; border-top: 1px solid #e0e0e0; margin: 2em 0; }
 ul, ol { margin: 0.5em 0 1em 1.5em; }
@@ -119,10 +132,109 @@ def _text_to_html(text: str) -> str:
     return "\n".join(paragraphs) if paragraphs else "<p><em>No content available.</em></p>"
 
 
+# Punctuation that must hug adjacent words (no space before closers,
+# none after openers) when a whitespace-only node sits at a tag boundary.
+_CLOSING_PUNCT = ",.;:!?%)]}'\"\"''"
+_OPENING_PUNCT = "([{‘“\""
+
+
+def _fix_punct_spacing(soup):
+    """Drop whitespace-only nodes glued to punctuation across tag boundaries.
+
+    LinkedIn emits spaces as separate spans, sometimes before `,`/`.`/`)`
+    or after `(`/quotes. Skips pre/code (verbatim) and only touches
+    whitespace-only nodes, so emoticons and in-word spacing are safe.
+    """
+    from bs4 import NavigableString as _NS, Comment as _CM
+
+    def _meaningful(t):
+        return (isinstance(t, _NS) and not isinstance(t, _CM)
+                and bool(str(t).strip()))
+
+    for s in soup.find_all(string=True):
+        if isinstance(s, _CM):
+            continue
+        if s.parent is not None and s.parent.name in ("pre", "code"):
+            continue
+        if not s or str(s).strip():
+            continue
+        prev = s.find_previous(string=_meaningful)
+        nxt = s.find_next(string=_meaningful)
+        prev_ch = str(prev).rstrip()[-1:] if prev is not None else ""
+        next_ch = str(nxt).lstrip()[:1] if nxt is not None else ""
+        if next_ch in _CLOSING_PUNCT or prev_ch in _OPENING_PUNCT:
+            s.extract()
+
+
+def _decode_data_uri(src: str):
+    """Decode data:image/...;base64,... → (bytes, mime, ext). None if unusable."""
+    import base64
+    m = re.match(r"data:(image/\w+);base64,(.+)", (src or "").strip(), re.DOTALL)
+    if not m:
+        return None
+    mime = m.group(1).lower()
+    ext = {"image/jpeg": "jpg", "image/png": "png",
+           "image/gif": "gif", "image/webp": "webp"}.get(mime)
+    if not ext:
+        return None
+    try:
+        return base64.b64decode(m.group(2)), mime, ext
+    except Exception:
+        return None
+
+
+def _clean_article_soup(soup):
+    """Shared LinkedIn HTML cleanup: code blocks, <code> tags, <pre> styling."""
+    from bs4 import Comment as _Comment
+
+    _fix_punct_spacing(soup)
+
+    # Convert LinkedIn <span class="white-space-pre"> to <pre>
+    for span in soup.find_all("span", class_=lambda c: c and "white-space-pre" in " ".join(c)):
+        pre = soup.new_tag("pre")
+        pre.string = span.get_text()
+        span.replace_with(pre)
+
+    # Also handle inline style white-space:pre on any element
+    for el in soup.find_all(True):
+        style = el.get("style", "")
+        if ("white-space: pre" in style or "white-space:pre" in style) and el.name not in ("pre", "code"):
+            el.name = "pre"
+
+    # ── Clean up <code> tags ─────────────────────────────────────────────
+    # LinkedIn adds HTML comments (<!---->)  inside <code> tags
+    # Remove these comments and ensure clean text
+    for code_tag in soup.find_all("code"):
+        # Remove HTML comments from code tags
+        for comment in code_tag.find_all(string=lambda text: isinstance(text, _Comment)):
+            comment.extract()
+
+        # Clean up the text content (strip extra whitespace from comments)
+        text = code_tag.get_text()
+        if text:
+            code_tag.clear()
+            code_tag.string = text
+
+        # Add inline styles for ePub reader compatibility
+        # Some readers don't fully support external CSS
+        code_tag['style'] = ('background-color:#1a3a52;color:#ffffff;font-weight:bold;'
+                             'padding:0.15em 0.4em;border-radius:3px;'
+                             'font-family:monospace;white-space:pre-wrap;')
+
+    # ── Style <pre> tags for ePub reader compatibility ──────────────────
+    for pre_tag in soup.find_all("pre"):
+        # Add inline styles for ePub readers that don't fully support external CSS
+        pre_tag['style'] = ('background-color:#1a3a52;color:#ffffff;font-weight:bold;'
+                            'padding:0.8em 1em;border-radius:4px;margin:1em 0;'
+                            'font-family:monospace;white-space:pre-wrap;'
+                            'word-wrap:break-word;line-height:1.45;')
+
+
 def _get_body_html(content: str) -> str:
     """
     Return content ready for ePub insertion.
     - Converts LinkedIn white-space-pre spans to <pre> blocks for proper code rendering.
+    - Cleans up inline <code> tags (removes HTML comments).
     - Strips base64 data URI images (bloat; fetch_article_rich supplies real images).
     - If plain text, converts to paragraphs.
     """
@@ -134,24 +246,48 @@ def _get_body_html(content: str) -> str:
         import re as _re
 
         soup = _BS(content, "html.parser")
-
-        # Convert LinkedIn <span class="white-space-pre"> to <pre>
-        for span in soup.find_all("span", class_=lambda c: c and "white-space-pre" in " ".join(c)):
-            pre = soup.new_tag("pre")
-            pre.string = span.get_text()
-            span.replace_with(pre)
-
-        # Also handle inline style white-space:pre on any element
-        for el in soup.find_all(True):
-            style = el.get("style", "")
-            if ("white-space: pre" in style or "white-space:pre" in style) and el.name not in ("pre", "code"):
-                el.name = "pre"
+        _clean_article_soup(soup)
 
         # Strip base64 data URI images
         clean = _re.sub(r'src="data:[^"]*"', 'src=""', str(soup))
         return clean
 
     return _text_to_html(content)
+
+
+def _offline_body_html(content: str, idx: int) -> tuple[str, list]:
+    """
+    Offline variant: same cleanup, but the already-downloaded base64
+    data-URI images are converted into EPUB image items instead of being
+    stripped, so generation never needs to revisit LinkedIn.
+
+    Returns (html, images) where images are dicts like fetch_article_rich
+    provides: {'epub_name', 'mime', 'data'} with chapter-relative refs
+    (../images/…) already rewritten into the html.
+    """
+    if not content:
+        return "<p><em>No content available.</em></p>", []
+    if not content.strip().startswith("<"):
+        return _text_to_html(content), []
+
+    from bs4 import BeautifulSoup as _BS
+
+    soup = _BS(content, "html.parser")
+    _clean_article_soup(soup)
+
+    images: list = []
+    n = 0
+    for img_tag in soup.find_all("img"):
+        decoded = _decode_data_uri(img_tag.get("src", ""))
+        if not decoded:
+            img_tag["src"] = ""  # external/stale ref: drop (offline)
+            continue
+        n += 1
+        data, mime, ext = decoded
+        epub_name = f"art_{idx:04d}_img_{n:03d}.{ext}"
+        images.append({"epub_name": epub_name, "mime": mime, "data": data})
+        img_tag["src"] = f"../images/{epub_name}"
+    return str(soup), images
 
 
 def _make_chapter_html(title: str, profile: str, published: Optional[str],
@@ -203,6 +339,9 @@ def build_epub(
     password: Optional[str] = None,
     fetch_images: bool = True,
     output_path: Optional[Path] = None,
+    cover_image: Optional[bytes] = None,   # validated via cover_art
+    cover_ext: str = "jpg",
+    cover_mime: str = "image/jpeg",
 ) -> Path:
     """
     Build an EPUB file from a list of articles.
@@ -241,8 +380,39 @@ def build_epub(
     )
     book.add_item(cover_css_item)
 
-    # Cover page
-    cover_html = f"""<?xml version="1.0" encoding="utf-8"?>
+    # Cover page: uploaded image (whole image, nothing overlaid) or title page
+    if cover_image:
+        cover_name = f"cover.{cover_ext.lstrip('.') or 'jpg'}"
+        # EpubCover (not plain EpubItem): the writer then marks it with
+        # properties="cover-image" (EPUB3), which is what readers use for
+        # library thumbnails. The guide reference covers EPUB2 readers.
+        cover_img_item = epub.EpubCover(file_name=f"images/{cover_name}")
+        cover_img_item.content = cover_image
+        book.add_item(cover_img_item)
+        book.add_metadata("OPF", "meta", "",
+                          {"name": "cover", "content": "cover-img"})
+        book.guide.append({"type": "cover", "title": "Cover",
+                           "href": "cover.xhtml"})
+        # Plain full-width <img> (no SVG, no max-height): ebooklib parses
+        # chapter bodies as HTML, which lowercases SVG attributes
+        # (viewBox -> viewbox breaks scaling) and drops <style>. A
+        # width-based img survives parsing and always renders; body margins
+        # are zeroed by cover.css, so the image fills the whole cover width
+        # with nothing overlaid and no cropping.
+        cover_html = f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>{_esc(title)}</title>
+</head>
+<body>
+  <img src="images/{cover_name}" alt="Cover"
+       style="width:100%;height:auto;display:block;margin:0;"/>
+</body>
+</html>"""
+    else:
+        cover_html = f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 <head>
@@ -266,7 +436,8 @@ def build_epub(
     book.add_item(cover_chapter)
 
     chapters = [cover_chapter]
-    spine = ["nav", cover_chapter]
+    # Cover first so readers open the book on the cover, not the TOC.
+    spine = [cover_chapter, "nav"]
 
     # Optionally open a LinkedIn session for rich content
     sess = None
@@ -292,6 +463,7 @@ def build_epub(
             art_published = art.get("published")
             art_profile   = art.get("profile") or ""
             art_content   = art.get("content") or ""
+            art_banner_b64 = art.get("banner_image") or ""  # Stored banner from DB
 
             images = []
             banner_epub_name = None
@@ -302,7 +474,7 @@ def build_epub(
                     body_html = rich["html"]
                     images = rich["images"]
 
-                    # Handle banner image
+                    # Handle banner image (fetch from LinkedIn)
                     bi = rich.get("banner_image")
                     if bi:
                         ext = bi["epub_name"].rsplit(".", 1)[-1]
@@ -326,7 +498,45 @@ def build_epub(
                 except Exception:
                     body_html = _get_body_html(art_content)
             else:
-                body_html = _get_body_html(art_content)
+                # Fully offline: downloaded text plus the embedded images
+                # already stored in the DB — no trip back to LinkedIn.
+                body_html, embedded = _offline_body_html(art_content, idx)
+                images.extend(embedded)
+
+                # Use stored banner from database (base64 data URI)
+                if art_banner_b64 and art_banner_b64.startswith("data:"):
+                    try:
+                        # Extract mime type and base64 data
+                        # Format: data:image/jpeg;base64,/9j/4AAQ...
+                        import base64
+                        parts = art_banner_b64.split(",", 1)
+                        if len(parts) == 2:
+                            header = parts[0]  # "data:image/jpeg;base64"
+                            b64_data = parts[1]
+                            
+                            # Extract mime type
+                            mime = "image/jpeg"  # default
+                            if ":" in header and ";" in header:
+                                mime = header.split(":")[1].split(";")[0]
+                            
+                            # Decode base64
+                            image_data = base64.b64decode(b64_data)
+                            
+                            # Determine extension
+                            ext = {"image/jpeg": "jpg", "image/png": "png",
+                                   "image/gif": "gif", "image/webp": "webp"}.get(mime, "jpg")
+                            
+                            banner_epub_name = f"art_{idx:04d}_banner.{ext}"
+                            banner_item = epub.EpubItem(
+                                uid=f"banner_{idx}",
+                                file_name=f"images/{banner_epub_name}",
+                                media_type=mime,
+                                content=image_data,
+                            )
+                            book.add_item(banner_item)
+                    except Exception:
+                        # Failed to decode banner, skip it
+                        pass
 
             # Add images to the epub
             for img in images:
@@ -350,7 +560,11 @@ def build_epub(
                 lang="en",
             )
             chapter.content = chapter_html.encode("utf-8")
-            chapter.add_item(css_item)
+            # add_link (not add_item): ebooklib writes add_item() css hrefs
+            # verbatim ("styles/…"), which 404s from chapters/ — breaking ALL
+            # chapter styling. Chapters sit one level down, hence ../styles/.
+            chapter.add_link(href="../styles/article.css", rel="stylesheet",
+                             type="text/css")
             book.add_item(chapter)
             chapters.append(chapter)
             spine.append(chapter)

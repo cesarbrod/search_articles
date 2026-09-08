@@ -5,6 +5,14 @@
 <section class="dashboard">
   <h1>Dashboard</h1>
 
+  {# ── Startup update banner ── #}
+  {% if show_update_check %}
+  <div id="update-banner" class="update-banner">
+    <span id="update-banner-msg">Checking for new articles…</span>
+    <div id="update-banner-actions" class="hidden"></div>
+  </div>
+  {% endif %}
+
   {% if profiles %}
   <table class="profile-table">
     <thead>
@@ -20,15 +28,14 @@
         <td>
           <a href="https://www.linkedin.com/in/{{ p }}/" target="_blank" rel="noopener">{{ p }}</a>
         </td>
-        <td>{{ counts[p] }}</td>
+        <td id="count-{{ p }}">{{ counts[p] }}</td>
         <td class="actions">
           <a href="{{ url_for('article_list', profile=p) }}">List</a>
           <a href="{{ url_for('search', profile=p) }}">Search</a>
           {% if has_credentials %}
           <button class="btn-action" onclick="runUpdate('{{ p }}')">Sync</button>
           <button class="btn-action" onclick="runFetchContent('{{ p }}')">Fetch text</button>
-          {% endif %}
-        </td>
+          {% endif %}        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -45,6 +52,19 @@
       <button type="submit">Sync</button>
     </form>
   </div>
+  <div class="sync-box">
+    <h2>Refetch an updated article</h2>
+    <p class="hint" style="margin-bottom:.75rem">Re-downloads one stored article that changed on LinkedIn.</p>
+    <form id="refetch-form" onsubmit="runRefetch(document.getElementById('refetch-input').value); return false;">
+      <input id="refetch-input" type="url" placeholder="Article link (https://www.linkedin.com/pulse/…)" required />
+      <button type="submit">Refetch</button>
+    </form>
+  </div>
+  <div class="sync-box">
+    <h2>Migrate existing articles to HTML</h2>
+    <p class="hint" style="margin-bottom:.75rem">Re-fetches all articles stored as plain text and saves them as full HTML with images. This may take a while.</p>
+    <button class="btn-action" onclick="runMigrateHtml()">Migrate to HTML</button>
+  </div>
   {% else %}
   <p class="hint"><a href="{{ url_for('login') }}">Sign in</a> to sync or fetch article content.</p>
   {% endif %}
@@ -54,6 +74,7 @@
 </section>
 
 <script>
+  // ── Helpers ────────────────────────────────────────────────────────────────
   function showStatus(msg, isError) {
     const el = document.getElementById('status-msg');
     el.textContent = msg;
@@ -64,6 +85,7 @@
     document.getElementById('spinner').className = 'spinner' + (on ? '' : ' hidden');
   }
 
+  // ── Sync / fetch ───────────────────────────────────────────────────────────
   async function runUpdate(profile) {
     if (!profile) return;
     setSpinner(true);
@@ -75,6 +97,9 @@
       const data = await res.json();
       if (data.error) {
         showStatus('Error: ' + data.error, true);
+      } else if (data.up_to_date) {
+        showStatus('✔ ' + profile + ' is already up to date.', false);
+        setTimeout(() => location.reload(), 1500);
       } else {
         showStatus('✔ ' + profile + ': ' + data.new + ' new article(s). Total: ' + data.total + '.', false);
         setTimeout(() => location.reload(), 1500);
@@ -96,13 +121,152 @@
       const data = await res.json();
       if (data.error) {
         showStatus('Error: ' + data.error, true);
+      } else if (data.fetched === 0) {
+        showStatus('✔ ' + profile + ': all articles already have text.', false);
       } else {
-        showStatus('✔ ' + profile + ': ' + data.fetched + ' article(s) fetched.', false);
+        showStatus('✔ ' + profile + ': text fetched for ' + data.fetched + ' article(s).', false);
       }
     } catch (e) {
       showStatus('Request failed: ' + e, true);
     }
     setSpinner(false);
   }
+
+  async function runRefetch(url) {
+    url = (url || '').trim();
+    if (!url) return;
+    setSpinner(true);
+    showStatus('Refetching article… (a browser window will open)', false);
+    try {
+      const fd = new FormData();
+      fd.append('url', url);
+      const res = await fetch('/refetch', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) {
+        showStatus('Error: ' + data.error, true);
+      } else {
+        showStatus('✔ Updated "' + data.title + '" (' + data.chars + ' chars).', false);
+        document.getElementById('refetch-input').value = '';
+      }
+    } catch (e) {
+      showStatus('Request failed: ' + e, true);
+    }
+    setSpinner(false);
+  }
+
+  async function runMigrateHtml() {
+    setSpinner(true);
+    showStatus('Migrating articles to HTML… (a browser window will open, this may take a while)', false);
+    try {
+      const res = await fetch('/migrate-to-html', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        showStatus('Error: ' + data.error, true);
+      } else if (data.updated === 0) {
+        showStatus('✔ All articles are already stored as HTML.', false);
+      } else {
+        showStatus('✔ Migrated ' + data.updated + ' of ' + data.total + ' article(s) to HTML.', false);
+      }
+    } catch (e) {
+      showStatus('Request failed: ' + e, true);
+    }
+    setSpinner(false);
+  }
+
+  // ── Startup update check ───────────────────────────────────────────────────
+  {% if show_update_check %}
+  (async function startupCheck() {
+    const banner     = document.getElementById('update-banner');
+    const bannerMsg  = document.getElementById('update-banner-msg');
+    const bannerAct  = document.getElementById('update-banner-actions');
+
+    try {
+      const res  = await fetch('/check-updates', { method: 'POST' });
+      const data = await res.json();
+
+      if (data.error) {
+        bannerMsg.textContent = '⚠ Update check failed: ' + data.error;
+        banner.className = 'update-banner error';
+        return;
+      }
+
+      const newByProfile = data.new_by_profile;
+      const lastSynced   = data.last_synced || {};
+      const profiles = Object.keys(newByProfile);
+
+      if (profiles.length === 0) {
+        const syncInfo = Object.entries(lastSynced).map(([p,t]) => p + ' (last synced: ' + t + ')').join(', ');
+        bannerMsg.textContent = '✔ All profiles are up to date.' + (syncInfo ? '  ' + syncInfo : '');
+        banner.className = 'update-banner success';
+        setTimeout(() => banner.remove(), 5000);
+        return;
+      }
+
+      // Build summary
+      let summary = profiles.map(p =>
+        p + ': ' + newByProfile[p].length + ' new article(s)'
+      ).join(' · ');
+      bannerMsg.textContent = 'New articles found — ' + summary;
+      banner.className = 'update-banner warning';
+
+      // Show article titles as a small list
+      const list = document.createElement('ul');
+      list.className = 'update-list';
+      profiles.forEach(p => {
+        newByProfile[p].forEach(art => {
+          const li = document.createElement('li');
+          li.textContent = '[' + p + '] ' + art.title;
+          list.appendChild(li);
+        });
+      });
+      bannerAct.appendChild(list);
+
+      // Sync / dismiss buttons
+      const btnSync = document.createElement('button');
+      btnSync.className = 'btn-banner-sync';
+      btnSync.textContent = 'Sync now';
+      btnSync.onclick = async () => {
+        btnSync.disabled = true;
+        btnSync.textContent = 'Saving…';
+        const r = await fetch('/apply-updates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_by_profile: newByProfile }),
+        });
+        const d = await r.json();
+        bannerMsg.textContent = '✔ ' + d.added + ' article(s) added.';
+        banner.className = 'update-banner success';
+        bannerAct.remove();
+
+        // Offer to fetch text for articles missing it
+        const missingCount = Object.values(newByProfile).reduce((s, a) => s + a.length, 0);
+        if (missingCount > 0) {
+          bannerMsg.textContent += ' Fetching text for new articles…';
+          const fd2 = new FormData();
+          // no profile = all profiles
+          const r2 = await fetch('/fetch-content', { method: 'POST', body: fd2 });
+          const d2 = await r2.json();
+          if (d2.fetched > 0) {
+            bannerMsg.textContent += ' Text fetched for ' + d2.fetched + ' article(s).';
+          }
+        }
+        setTimeout(() => location.reload(), 2000);
+      };
+
+      const btnDismiss = document.createElement('button');
+      btnDismiss.className = 'btn-banner-dismiss';
+      btnDismiss.textContent = 'Dismiss';
+      btnDismiss.onclick = () => banner.remove();
+
+      bannerAct.appendChild(btnSync);
+      bannerAct.appendChild(btnDismiss);
+      bannerAct.className = '';   // unhide
+
+    } catch (e) {
+      bannerMsg.textContent = '⚠ Update check failed: ' + e;
+      banner.className = 'update-banner error';
+    }
+  })();
+  {% endif %}
 </script>
 {% endblock %}

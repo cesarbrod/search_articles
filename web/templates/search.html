@@ -35,6 +35,138 @@
     <code>"a" OR "b"</code> → OR
   </div>
 
+  {# ── ebook export panel — always visible ── #}
+  <div class="epub-panel">
+    <div class="epub-panel-header" onclick="toggleEpub()">
+      <span>&#128218; Generate ebook</span>
+      <span id="epub-chevron" class="epub-chevron">&#9660;</span>
+    </div>
+    <div id="epub-body" class="epub-panel-body" style="display:none">
+      <form id="epub-form" onsubmit="submitEpub(event)">
+        <input type="hidden" name="article_ids" value="{{ result_ids }}" />
+        <input type="hidden" name="profile_filter" value="{{ profile_filter or '' }}" />
+        <input type="hidden" name="ordered_ids" id="ordered-ids-input" value="" />
+
+        <div class="epub-row">
+          <label class="epub-label">Format</label>
+          <div class="epub-options">
+            <label class="epub-radio">
+              <input type="radio" name="format" value="epub" checked
+                     onchange="updateFormatBtn()" />
+              ePub (e-readers)
+            </label>
+            <label class="epub-radio">
+              <input type="radio" name="format" value="docx"
+                     onchange="updateFormatBtn()" />
+              DOCX (Google Docs editing)
+            </label>
+            <label class="epub-radio">
+              <input type="radio" name="format" value="pdf"
+                     onchange="updateFormatBtn()" />
+              PDF (print / share)
+            </label>
+          </div>
+        </div>
+
+        <div class="epub-row">
+          <label class="epub-label">Cover</label>
+          <div class="epub-options">
+            <input type="file" name="cover" accept="image/png,image/jpeg" />
+            <span class="epub-note">Optional — ideal: portrait JPG/PNG,
+              1600×2560 px. The whole image is used as the cover, nothing
+              overlaid on it. Without a cover, a plain title page is used.</span>
+          </div>
+        </div>
+
+        <div class="epub-row">
+          <label class="epub-label">Scope</label>
+          <div class="epub-options">
+            <label class="epub-radio">
+              <input type="radio" name="scope" value="search"
+                     {{ 'checked' if results }} {{ 'disabled' if not results }} />
+              Only these search results
+              {% if results %}({{ results|length }}){% else %}<em>— run a search first</em>{% endif %}
+            </label>
+            {% if profile_filter %}
+            <label class="epub-radio">
+              <input type="radio" name="scope" value="author"
+                     {{ 'checked' if not results }} />
+              All articles by <strong>{{ profile_filter }}</strong>
+            </label>
+            {% else %}
+            {% for p in profiles %}
+            <label class="epub-radio">
+              <input type="radio" name="scope" value="author_{{ p }}"
+                     {{ 'checked' if not results and loop.first }} />
+              All articles by <strong>{{ p }}</strong>
+            </label>
+            {% endfor %}
+            {% endif %}
+            <label class="epub-radio">
+              <input type="radio" name="scope" value="recent" />
+              Most recent
+              <input type="number" name="recent_n" value="10" min="1" max="999"
+                     class="epub-n-input"
+                     onclick="this.closest('label').querySelector('input[type=radio]').checked=true" />
+              articles
+              <select name="recent_profile" class="epub-select-sm"
+                      onchange="this.closest('label').querySelector('input[type=radio]').checked=true">
+                <option value="">— all authors —</option>
+                {% for p in profiles %}
+                <option value="{{ p }}" {{ 'selected' if p == profile_filter }}>{{ p }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="epub-radio">
+              <input type="radio" name="scope" value="all" />
+              Everything in the database
+            </label>
+          </div>
+        </div>
+
+        <div class="epub-row">
+          <label class="epub-label">Title</label>
+          <input type="text" name="epub_title" placeholder="Leave blank for auto title"
+                 class="epub-title-input" />
+        </div>
+
+        <div class="epub-row epub-row-inline">
+          <label class="epub-label">Images</label>
+          <label class="epub-checkbox">
+            <input type="checkbox" name="fetch_images" value="1"
+                   {{ 'disabled' if not has_credentials }} />
+            Fetch fresh images from LinkedIn
+            {% if not has_credentials %}
+            <span class="epub-note">(sign in to enable)</span>
+            {% else %}
+            <span class="epub-note">(off: uses already-downloaded text &amp; images)</span>
+            {% endif %}
+          </label>
+        </div>
+
+        {# ── Article preview / reorder ── #}
+        <div class="epub-row epub-preview-row" id="epub-preview-row" style="display:none">
+          <label class="epub-label">Articles</label>
+          <div class="epub-preview-area">
+            <p class="epub-preview-hint">Uncheck to exclude · drag or use ↑↓ to reorder</p>
+            <ul id="epub-article-list" class="epub-article-list"></ul>
+          </div>
+        </div>
+
+        <div class="epub-actions">
+          <button type="button" class="epub-btn-preview" id="epub-preview-btn"
+                  onclick="loadEpubPreview()">
+            &#128196; Preview &amp; reorder
+          </button>
+          <button type="submit" class="epub-btn-generate" id="epub-btn">
+            &#8681; Download ePub
+          </button>
+          <span id="epub-status" class="epub-status"></span>
+        </div>
+      </form>
+    </div>
+  </div>
+
   {% if query %}
     {% if results %}
     <p class="count">{{ results|length }} result(s) for <em>{{ query }}</em></p>
@@ -48,18 +180,20 @@
         <span class="result-date">{{ row.published or 'unknown date' }}</span>
       </div>
       <h2 class="result-title">
-        <a href="{{ row.url }}" target="_blank" rel="noopener">{{ row.title }}</a>
+        <a href="{{ url_for('article_view', article_id=row.id) }}">{{ row.title }}</a>
+        <a href="{{ row.url }}" target="_blank" rel="noopener" class="ext-link" title="Open on LinkedIn">↗</a>
       </h2>
-      {% if row.content %}
-        {% set content_lines = row.content.splitlines() | select | list %}
+      {% if row.snippet_lines is defined %}
         <div class="result-snippet">
-          {% for line in content_lines[:lines] %}
+          {% for line in row.snippet_lines %}
             <p>{{ line }}</p>
           {% endfor %}
-          {% if content_lines|length > lines %}
-          <p class="more">… {{ content_lines|length - lines }} more line(s)</p>
+          {% if row.snippet_more > 0 %}
+          <p class="more">… {{ row.snippet_more }} more line(s)</p>
           {% endif %}
         </div>
+      {% elif row.content %}
+        <p class="no-content"><em>Fetching snippet…</em></p>
       {% else %}
         <p class="no-content">No text stored — run <em>Fetch text</em> from the dashboard.</p>
       {% endif %}
@@ -71,4 +205,286 @@
     {% endif %}
   {% endif %}
 </section>
+
+<script>
+  function toggleEpub() {
+    const body = document.getElementById('epub-body');
+    const chev = document.getElementById('epub-chevron');
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    chev.innerHTML = open ? '&#9660;' : '&#9650;';
+  }
+
+  // ── Preview & reorder ──────────────────────────────────────────────────────
+  async function loadEpubPreview() {
+    const form   = document.getElementById('epub-form');
+    const btn    = document.getElementById('epub-preview-btn');
+    const status = document.getElementById('epub-status');
+    const fd     = new FormData(form);
+
+    const scopeRaw = fd.get('scope') || 'search';
+    let scope   = scopeRaw;
+    let profile = fd.get('profile_filter') || '';
+    if (scopeRaw.startsWith('author_')) { scope = 'author'; profile = scopeRaw.slice(7); }
+    else if (scopeRaw === 'author')      { scope = 'author'; }
+    else if (scopeRaw === 'recent')      { profile = fd.get('recent_profile') || ''; }
+
+    const payload = new FormData();
+    payload.append('scope',       scope);
+    payload.append('profile',     profile);
+    payload.append('article_ids', fd.get('article_ids') || '');
+    payload.append('recent_n',    fd.get('recent_n') || '10');
+
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    status.textContent = '';
+
+    try {
+      const res  = await fetch('/epub-preview', { method: 'POST', body: payload });
+      const data = await res.json();
+      if (data.error) {
+        status.textContent = '⚠ ' + data.error;
+        status.className = 'epub-status error';
+        return;
+      }
+      renderArticleList(data.articles);
+    } catch (e) {
+      status.textContent = '⚠ ' + e;
+      status.className = 'epub-status error';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '📄 Preview & reorder';
+    }
+  }
+
+  function renderArticleList(articles) {
+    const ul  = document.getElementById('epub-article-list');
+    const row = document.getElementById('epub-preview-row');
+    ul.innerHTML = '';
+
+    articles.forEach((art) => {
+      const li = document.createElement('li');
+      li.className = 'epub-article-item';
+      li.dataset.id = art.id;
+      li.draggable = true;
+
+      // Drag handle
+      const handle = document.createElement('span');
+      handle.className = 'epub-drag-handle';
+      handle.title = 'Drag to reorder';
+      handle.textContent = '⠿';
+
+      // Checkbox
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'epub-article-check';
+      cb.checked = true;
+      cb.addEventListener('change', updateOrderedIds);
+
+      // Title
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'epub-article-title';
+      titleSpan.textContent = art.title;
+
+      // Date
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'epub-article-date';
+      dateSpan.textContent = art.published;
+
+      // Profile
+      const profileSpan = document.createElement('span');
+      profileSpan.className = 'epub-article-profile';
+      profileSpan.textContent = art.profile;
+
+      // Up button
+      const btnUp = document.createElement('button');
+      btnUp.type = 'button';
+      btnUp.className = 'epub-move-btn';
+      btnUp.title = 'Move up';
+      btnUp.textContent = '↑';
+      btnUp.addEventListener('click', () => moveItem(li, -1));
+
+      // Down button
+      const btnDown = document.createElement('button');
+      btnDown.type = 'button';
+      btnDown.className = 'epub-move-btn';
+      btnDown.title = 'Move down';
+      btnDown.textContent = '↓';
+      btnDown.addEventListener('click', () => moveItem(li, 1));
+
+      li.appendChild(handle);
+      li.appendChild(cb);
+      li.appendChild(titleSpan);
+      li.appendChild(dateSpan);
+      li.appendChild(profileSpan);
+      li.appendChild(btnUp);
+      li.appendChild(btnDown);
+      ul.appendChild(li);
+    });
+
+    // Wire up drag-and-drop on the list
+    initDragDrop(ul);
+
+    row.style.display = '';
+    updateOrderedIds();
+  }
+
+  function moveItem(li, dir) {
+    const ul  = li.parentNode;
+    const siblings = Array.from(ul.children);
+    const idx = siblings.indexOf(li);
+    if (dir === -1 && idx > 0) {
+      ul.insertBefore(li, siblings[idx - 1]);
+    } else if (dir === 1 && idx < siblings.length - 1) {
+      ul.insertBefore(siblings[idx + 1], li);
+    }
+    updateOrderedIds();
+  }
+
+  function initDragDrop(ul) {
+    let dragging = null;
+
+    ul.addEventListener('dragstart', e => {
+      dragging = e.target.closest('li');
+      if (dragging) {
+        dragging.classList.add('epub-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      }
+    });
+
+    ul.addEventListener('dragend', () => {
+      if (dragging) dragging.classList.remove('epub-dragging');
+      dragging = null;
+      document.querySelectorAll('.epub-drag-over')
+        .forEach(el => el.classList.remove('epub-drag-over'));
+      updateOrderedIds();
+    });
+
+    ul.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const target = e.target.closest('li');
+      if (target && target !== dragging) {
+        document.querySelectorAll('.epub-drag-over')
+          .forEach(el => el.classList.remove('epub-drag-over'));
+        target.classList.add('epub-drag-over');
+      }
+    });
+
+    ul.addEventListener('drop', e => {
+      e.preventDefault();
+      const target = e.target.closest('li');
+      if (target && dragging && target !== dragging) {
+        const siblings = Array.from(ul.children);
+        const fromIdx  = siblings.indexOf(dragging);
+        const toIdx    = siblings.indexOf(target);
+        if (fromIdx < toIdx) ul.insertBefore(dragging, target.nextSibling);
+        else                  ul.insertBefore(dragging, target);
+      }
+      document.querySelectorAll('.epub-drag-over')
+        .forEach(el => el.classList.remove('epub-drag-over'));
+      updateOrderedIds();
+    });
+  }
+
+  function updateOrderedIds() {
+    const items = document.querySelectorAll('#epub-article-list .epub-article-item');
+    const ids = [];
+    items.forEach(li => {
+      const cb = li.querySelector('.epub-article-check');
+      if (cb && cb.checked) ids.push(li.dataset.id);
+    });
+    document.getElementById('ordered-ids-input').value = ids.join(',');
+  }
+
+  // Re-sync when checkboxes change
+  document.addEventListener('change', e => {
+    if (e.target.classList.contains('epub-article-check')) updateOrderedIds();
+  });
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Generate ebook (ePub / DOCX / PDF) ───────────────────────────────────
+  function selectedFormat() {
+    const checked = document.querySelector(
+      '#epub-form input[name="format"]:checked');
+    return checked ? checked.value : 'epub';
+  }
+
+  function updateFormatBtn() {
+    const fmt = selectedFormat();
+    const btn = document.getElementById('epub-btn');
+    btn.textContent = '⬇ Download ' + fmt.toUpperCase();
+  }
+
+  async function submitEpub(e) {
+    e.preventDefault();
+    const form   = document.getElementById('epub-form');
+    const btn    = document.getElementById('epub-btn');
+    const status = document.getElementById('epub-status');
+    const fd     = new FormData(form);
+
+    const scopeRaw = fd.get('scope') || 'search';
+    let scope   = scopeRaw;
+    let profile = fd.get('profile_filter') || '';
+    if (scopeRaw.startsWith('author_')) { scope = 'author'; profile = scopeRaw.slice(7); }
+    else if (scopeRaw === 'author')      { scope = 'author'; }
+    else if (scopeRaw === 'recent')      { profile = fd.get('recent_profile') || ''; }
+
+    const payload = new FormData();
+    payload.append('format',       selectedFormat());
+    payload.append('scope',        scope);
+    payload.append('profile',      profile);
+    payload.append('article_ids',  fd.get('article_ids') || '');
+    payload.append('ordered_ids',  fd.get('ordered_ids') || '');
+    payload.append('recent_n',     fd.get('recent_n') || '10');
+    payload.append('epub_title',   fd.get('epub_title') || '');
+    if (fd.get('fetch_images')) payload.append('fetch_images', '1');
+    const coverFile = document.querySelector('#epub-form input[name="cover"]');
+    if (coverFile && coverFile.files.length) {
+      payload.append('cover', coverFile.files[0]);
+    }
+
+    const fmt = selectedFormat();
+    const fmtLabel = fmt === 'docx' ? 'DOCX' : fmt.toUpperCase();
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    status.className = 'epub-status';
+    status.textContent = (scope === 'all' || scope === 'author')
+      ? 'This may take a while for large collections…'
+      : 'Building ' + fmtLabel + '…';
+
+    try {
+      const res = await fetch('/generate-book', { method: 'POST', body: payload });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        status.textContent = '⚠ ' + (data.error || 'Generation failed.');
+        status.className = 'epub-status error';
+      } else {
+        const blob = await res.blob();
+        const disp = res.headers.get('Content-Disposition') || '';
+        const nameMatch = disp.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        const filename = nameMatch
+          ? nameMatch[1].replace(/['"]/g, '')
+          : 'articles.' + fmt;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        status.textContent = '✔ Download started.';
+        status.className = 'epub-status success';
+      }
+    } catch (err) {
+      status.textContent = '⚠ ' + err;
+      status.className = 'epub-status error';
+    }
+    updateFormatBtn();
+    btn.disabled = false;
+  }
+</script>
 {% endblock %}

@@ -3,13 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{% block title %}LinkedIn Articles{% endblock %}</title>
+  <title>{% block title %}LinkedIn Articles | BrodTec{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='logobrodlink.png') }}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Work+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
   <header>
     <nav>
-      <a href="{{ url_for('index') }}" class="brand">LinkedIn Articles</a>
+      <a href="{{ url_for('index') }}" class="brand">
+        <img src="{{ url_for('static', filename='logobrodlink.png') }}"
+             alt="BrodTec" class="brand-logo-img" />
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 0.4rem;">
+            <span>BrodTec</span>
+          </div>
+          <span class="brand-subtitle">LinkedIn Articles</span>
+        </div>
+      </a>
       <div class="nav-links">
         <a href="{{ url_for('article_list') }}">List</a>
         <a href="{{ url_for('search') }}">Search</a>
@@ -34,8 +47,17 @@
   </main>
 
   <footer>
-    <span>LinkedIn Articles — local only</span>
+    <div class="footer-content">
+      <div class="footer-brand">
+        <img src="{{ url_for('static', filename='logobrodlink.png') }}"
+             alt="BrodTec" class="footer-logo-img" />
+        <span>BrodTec</span>
+      </div>
+      <div class="footer-tagline">Tecnologia como motor de receita</div>
+      <div style="margin-top: 0.5rem; font-size: 0.75rem;">
+        <a href="http://brodtec.com" target="_blank" rel="noopener" style="color: var(--accent);">brodtec.com</a>
+      </div>
+    </div>
   </footer>
 </body>
 </html>
-

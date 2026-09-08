@@ -135,9 +135,20 @@ def get_article_by_id(article_id: int):
     """Return a single article row by ID."""
     with get_connection() as conn:
         return conn.execute(
-            "SELECT id, profile, title, url, published, content, content_type, fetched_at "
+            "SELECT id, profile, title, url, published, content, content_type, fetched_at, banner_image "
             "FROM articles WHERE id=?",
             (article_id,),
+        ).fetchone()
+
+
+def get_article_by_url(url: str):
+    """Return a single article row by URL (normalised like stored URLs), or None."""
+    url = _norm_url(url)
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, profile, title, url, published, content_type, fetched_at "
+            "FROM articles WHERE url=?",
+            (url,),
         ).fetchone()
 
 
@@ -158,7 +169,7 @@ def get_articles_by_ids(ids: list[int]) -> list[sqlite3.Row]:
     placeholders = ",".join("?" * len(ids))
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT id, profile, title, url, published, content FROM articles "
+            f"SELECT id, profile, title, url, published, content, banner_image FROM articles "
             f"WHERE id IN ({placeholders})",
             ids,
         ).fetchall()
@@ -171,7 +182,7 @@ def get_articles_by_profile_all(profile: str) -> list[sqlite3.Row]:
     """Return all articles for a profile, ordered by published desc."""
     with get_connection() as conn:
         return conn.execute(
-            "SELECT profile, title, url, published, content FROM articles "
+            "SELECT profile, title, url, published, content, banner_image FROM articles "
             "WHERE profile=? ORDER BY published DESC",
             (profile,),
         ).fetchall()
@@ -182,12 +193,12 @@ def get_most_recent_articles(limit: int = 10, profile: Optional[str] = None) -> 
     with get_connection() as conn:
         if profile:
             return conn.execute(
-                "SELECT profile, title, url, published, content FROM articles "
+                "SELECT profile, title, url, published, content, banner_image FROM articles "
                 "WHERE profile=? ORDER BY published DESC LIMIT ?",
                 (profile, limit),
             ).fetchall()
         return conn.execute(
-            "SELECT profile, title, url, published, content FROM articles "
+            "SELECT profile, title, url, published, content, banner_image FROM articles "
             "ORDER BY published DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -197,7 +208,7 @@ def get_all_articles() -> list[sqlite3.Row]:
     """Return every article in the DB, ordered by profile then published desc."""
     with get_connection() as conn:
         return conn.execute(
-            "SELECT profile, title, url, published, content FROM articles "
+            "SELECT profile, title, url, published, content, banner_image FROM articles "
             "ORDER BY profile ASC, published DESC",
         ).fetchall()
 

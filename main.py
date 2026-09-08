@@ -6,7 +6,9 @@ Usage:
   python main.py --update                         Sync your articles
   python main.py --update --other username        Sync another profile's articles
   python main.py --fetch-content                  Download full text for all your articles
-  python main.py --fetch-content --other username Download full text for another profile
+   python main.py --fetch-content --other username Download full text for another profile
+   python main.py --refetch URL               Re-download one updated article
+   python main.py --refetch                    Same, but prompts for the URL
   python main.py --list                           List your articles alphabetically
   python main.py --list --by-date                 List your articles by date (newest first)
   python main.py --list --other username          List another profile's articles
@@ -28,6 +30,7 @@ from db import (
     upsert_article,
     update_content,
     update_published,
+    get_article_by_url,
     get_articles_without_content,
     get_known_urls_by_profile,
     get_latest_fetched_at,
@@ -244,6 +247,36 @@ def cmd_update(profile: str) -> None:
     print("   Tip: run --fetch-content to download article text for full-text search.")
 
 
+def cmd_refetch(url: str) -> None:
+    """Re-download content for one stored article (it was updated on LinkedIn)."""
+    row = get_article_by_url(url)
+    if row is None:
+        print(f"No article with that URL in the database.")
+        print("Sync it first with --update (or check the link).")
+        sys.exit(1)
+
+    print(f"Refetching '{row['title']}' …")
+    email, password = prompt_credentials()
+    print()
+
+    fetched: dict = {}
+
+    def on_fetched(fetched_url, result, index, total):
+        fetched.update(result if isinstance(result, dict) else {})
+
+    fetch_articles_text([row["url"]], email, password, verbose=True,
+                        on_fetched=on_fetched)
+    html = fetched.get("html", "")
+    if not html:
+        print(f"\n⚠  Could not retrieve the article — is it still published?")
+        sys.exit(1)
+    update_content(row["url"], html, content_type="html")
+    published = fetched.get("published")
+    if published:
+        update_published(row["url"], published)
+    print(f"\n✔  Article updated ({len(html)} chars stored).")
+
+
 def cmd_fetch_content(profile: str) -> None:
     """Download and store full text for articles that don't have it yet."""
     pending = get_articles_without_content(profile)
@@ -345,6 +378,17 @@ def main() -> None:
         help="Download full article text for all articles (required for search)",
     )
     parser.add_argument(
+        "--refetch",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="URL",
+        help=(
+            "Re-download one stored article that was updated on LinkedIn. "
+            "Give its URL, or omit it to be prompted: --refetch URL"
+        ),
+    )
+    parser.add_argument(
         "-l", "--list",
         action="store_true",
         help="List stored articles (default: alphabetical)",
@@ -395,18 +439,32 @@ def main() -> None:
     profile = args.other if args.other else DEFAULT_PROFILE
 
     # Default action: list
-    if not any([args.update, args.fetch_content, args.list, args.count, args.search]):
+    if not any([args.update, args.fetch_content, args.refetch is not None,
+                args.list, args.count, args.search]):
         args.list = True
 
     init_db()
 
     # ── Startup update check ───────────────────────────────────────────────
-    # Run when there are known profiles and the user isn't already syncing.
-    if not args.update and list_profiles():
+    # Run when there are known profiles and the user isn't already syncing
+    # (refetch opens its own session, so it skips the check too).
+    if not args.update and args.refetch is None and list_profiles():
         startup_check()
 
     if args.update:
         cmd_update(profile)
+    elif args.refetch is not None:
+        url = args.refetch.strip()
+        if not url:
+            try:
+                url = input("Article URL to refetch: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nCancelled.")
+                return
+        if not url:
+            print("No URL given.")
+            sys.exit(1)
+        cmd_refetch(url)
     elif args.fetch_content:
         cmd_fetch_content(profile)
     elif args.search:
