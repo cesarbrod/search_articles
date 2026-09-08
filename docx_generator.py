@@ -630,6 +630,136 @@ def _banner_bytes(art: dict) -> Optional[bytes]:
     return decoded[0] if decoded else None
 
 
+# ── Final BrodTec page ─────────────────────────────────────────────────────────
+
+_BRODTEC_URL = "https://brodtec.com"
+
+
+def _load_brodtec_logo() -> Optional[bytes]:
+    """Load the BrodTec logo for offline embedding. None when missing."""
+    from pathlib import Path as _Path
+    try:
+        data = (_Path(__file__).parent / "web" / "static" / "logobrodlink.png").read_bytes()
+        return bytes(data) or None
+    except Exception:
+        return None
+
+
+def _add_brodtec_page(doc: Document):
+    """Append the final one-page pt-BR summary of brodtec.com.
+
+    Mirrors the landing-page layout top-down; the contact form is replaced
+    by plain contact links (a form makes no sense on paper).
+    """
+    doc.add_page_break()
+    logo = _load_brodtec_logo()
+    if logo:
+        _add_image_paragraph(doc, logo, Inches(2.0))
+
+    doc.add_heading("Sobre a BrodTec", level=1)
+    hero = doc.add_paragraph(style="Normal")
+    hero.add_run("Transforme sua tecnologia de um centro de custo em um motor de receita.").bold = True
+    doc.add_paragraph(
+        "Ajudamos organizações a desescalar a complexidade, cruzar fronteiras e "
+        "libertar talentos humanos por meio do uso estratégico da Inteligência Artificial.",
+        style="Normal",
+    )
+
+    doc.add_heading("O problema", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("A tecnologia virou uma caixa-preta.").bold = True
+    p.add_run(" Os investimentos entram, mas os resultados demoram, os prazos estouram "
+              "e os custos com licenças e fornecedores só aumentam.")
+    for q in ("Sua TI parece um freio de mão em vez de um acelerador?",
+              "Sua equipe está sobrecarregada com tarefas repetitivas que não geram valor?",
+              "Sua expansão para novos mercados está travada por barreiras culturais e técnicas?"):
+        doc.add_paragraph(q, style="List Bullet")
+    doc.add_paragraph(
+        "Nós resolvemos a cegueira de eficiência: tiramos a tecnologia do isolamento "
+        "operacional e a reposicionamos como parceira estratégica do faturamento.",
+        style="Normal",
+    )
+
+    doc.add_heading("Para quem", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Agilidade, não burocracia.").bold = True
+    for title, desc in (
+        ("Pequenas e Médias Empresas",
+         "automatizar processos manuais e adotar IA para crescer sem explodir os custos."),
+        ("Empresas de Médio Porte",
+         "deixar de ser refém de sistemas engessados e otimizar o que já existe."),
+        ("Organizações em Expansão",
+         "entrar no mercado brasileiro ou levar sua tecnologia ao exterior sem perder a coesão."),
+    ):
+        pp = doc.add_paragraph(style="Normal")
+        pp.add_run(title + " — ").bold = True
+        pp.add_run(desc)
+
+    doc.add_heading("Como funciona", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Baseado no que sua empresa já tem.").bold = True
+    p.add_run(" Sem fórmulas prontas.")
+    for title, desc in (
+        ("01 — Diagnóstico Rápido (Blitz).",
+         "Em poucas semanas, identificamos gargalos invisíveis e entregamos um protótipo "
+         "funcional de IA personalizado para o seu negócio."),
+        ("02 — Setup de Eficiência.",
+         "Intervenção direta para renegociar contratos, melhorar fluxos de entrega "
+         "e reduzir custos fixos."),
+        ("03 — Arquitetura de Pontes.",
+         "Orquestramos a transição cultural e técnica para operar com agilidade "
+         "em qualquer território."),
+    ):
+        pp = doc.add_paragraph(style="Normal")
+        pp.add_run(title + " ").bold = True
+        pp.add_run(desc)
+
+    doc.add_heading("Resultados", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Transformações tangíveis.").bold = True
+    p.add_run(" O custo de não agir costuma ser muito maior que o investimento.")
+    for title, desc in (
+        ("Economia Real", "redução imediata de custos operacionais."),
+        ("Velocidade de Entrega", "o dobro de entregas com a mesma equipe."),
+        ("Agência Humana", "pessoas focadas na estratégia; o trabalho braçal fica com a IA."),
+        ("Previsibilidade", "parar de \u201cestimar\u201d e começar a \u201corçar\u201d com base na realidade."),
+    ):
+        pp = doc.add_paragraph(style="List Bullet")
+        pp.add_run(title + " — ").bold = True
+        pp.add_run(desc)
+
+    doc.add_heading("Por que confiar", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Mais de 30 anos domesticando a complexidade.").bold = True
+    p.add_run(" Cesar Brod, fundador da BrodTec, liderou a entrada de gigantes como Tandem "
+              "e ACI Worldwide no Brasil, expandiu operações para mais de 10 países e criou "
+              "a primeira cooperativa de software livre do mundo. Autor e tradutor de obras "
+              "de referência em engenharia de software.")
+
+    doc.add_heading("Como começar", level=2)
+    p = doc.add_paragraph(style="Normal")
+    p.add_run("Workshop de Liderança e IA").bold = True
+    p.add_run(" — intervenção prática de quatro horas: diagnóstico inicial de eficiência e a "
+              "primeira versão de um assistente de IA personalizado. "
+              "Investimento inicial: R$ 2.000,00.")
+
+    contact = doc.add_paragraph(style="Normal")
+    contact.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _add_hyperlink(contact, "https://brodtec.com", "brodtec.com")
+    contact.add_run("  ·  ")
+    _add_hyperlink(contact, "https://wa.me/5551981361214", "WhatsApp +55 51 98136-1214")
+    contact.add_run("  ·  ")
+    _add_hyperlink(contact, "mailto:cesar@brodtec.com", "cesar@brodtec.com")
+    contact.add_run("  ·  ")
+    _add_hyperlink(contact, "https://www.linkedin.com/in/cesarbrod/", "LinkedIn")
+
+    footer = doc.add_paragraph(style="Normal")
+    footer.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = footer.add_run("© 2026 BrodTec")
+    run.font.size = Pt(9)
+    run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+
 # ── Main builder ─────────────────────────────────────────────────────────────
 
 def build_docx(
@@ -638,6 +768,7 @@ def build_docx(
     author: str = "LinkedIn Articles Export",
     cover_image: Optional[bytes] = None,   # validated via cover_art
     output_path: Optional[Path] = None,
+    brodtec_page: bool = True,   # append final "Sobre a BrodTec" page
 ) -> Path:
     """Build a .docx book. Returns the output path."""
     if output_path is None:
@@ -764,6 +895,9 @@ def build_docx(
             _add_image_paragraph(doc, banner, BANNER_WIDTH)
 
         _add_body_html(doc, art_content)
+
+    if brodtec_page:
+        _add_brodtec_page(doc)
 
     doc.save(str(output_path))
     return output_path

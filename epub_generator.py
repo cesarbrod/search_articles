@@ -99,6 +99,19 @@ pre code {
 hr { border: none; border-top: 1px solid #e0e0e0; margin: 2em 0; }
 ul, ol { margin: 0.5em 0 1em 1.5em; }
 li { margin-bottom: 0.3em; }
+.brodtec-logo {
+    display: block;
+    margin: 0 auto 1.5em auto;
+    width: 38%;
+    max-width: 220px;
+    height: auto;
+}
+.brodtec-contact {
+    text-align: center;
+    margin-top: 1.5em;
+    padding-top: 1em;
+    border-top: 1px solid #e0e0e0;
+}
 table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 0.9em; }
 th, td { border: 1px solid #ddd; padding: 0.4em 0.6em; text-align: left; }
 th { background: #f5f5f5; font-weight: bold; }
@@ -388,6 +401,68 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+# ── Final BrodTec page ─────────────────────────────────────────────────────────
+
+_BRODTEC_URL = "https://brodtec.com"
+_BRODTEC_LOGO_NAME = "brodtec-logo.png"
+
+
+def _load_brodtec_logo():
+    """Load the BrodTec logo for offline embedding. Returns
+    (bytes, ext, mime) or None when the file is missing/unusable."""
+    from pathlib import Path as _Path
+    try:
+        p = _Path(__file__).parent / "web" / "static" / "logobrodlink.png"
+        data = p.read_bytes()
+        if not data:
+            return None
+        return bytes(data), "png", "image/png"
+    except Exception:
+        return None
+
+
+def _brodtec_body_html() -> str:
+    """One-page pt-BR summary of the brodtec.com landing page (no sub-pages).
+    The contact form is replaced by plain contact links (a form makes no
+    sense on paper)."""
+    return """<img class="brodtec-logo" src="../images/brodtec-logo.png" alt="BrodTec" />
+<h1>Sobre a BrodTec</h1>
+<p><strong>Transforme sua tecnologia de um centro de custo em um motor de receita.</strong></p>
+<p>Ajudamos organizações a desescalar a complexidade, cruzar fronteiras e libertar talentos humanos por meio do uso estratégico da Inteligência Artificial.</p>
+<h2>O problema</h2>
+<p><strong>A tecnologia virou uma caixa-preta.</strong> Os investimentos entram, mas os resultados demoram, os prazos estouram e os custos com licenças e fornecedores só aumentam.</p>
+<ul>
+<li>Sua TI parece um freio de mão em vez de um acelerador?</li>
+<li>Sua equipe está sobrecarregada com tarefas repetitivas que não geram valor?</li>
+<li>Sua expansão para novos mercados está travada por barreiras culturais e técnicas?</li>
+</ul>
+<p>Nós resolvemos a cegueira de eficiência: tiramos a tecnologia do isolamento operacional e a reposicionamos como parceira estratégica do faturamento.</p>
+<h2>Para quem</h2>
+<p><strong>Agilidade, não burocracia.</strong></p>
+<p><strong>Pequenas e Médias Empresas</strong> — automatizar processos manuais e adotar IA para crescer sem explodir os custos.</p>
+<p><strong>Empresas de Médio Porte</strong> — deixar de ser refém de sistemas engessados e otimizar o que já existe.</p>
+<p><strong>Organizações em Expansão</strong> — entrar no mercado brasileiro ou levar sua tecnologia ao exterior sem perder a coesão.</p>
+<h2>Como funciona</h2>
+<p><strong>Baseado no que sua empresa já tem.</strong> Sem fórmulas prontas.</p>
+<p><strong>01 — Diagnóstico Rápido (Blitz).</strong> Em poucas semanas, identificamos gargalos invisíveis e entregamos um protótipo funcional de IA personalizado para o seu negócio.</p>
+<p><strong>02 — Setup de Eficiência.</strong> Intervenção direta para renegociar contratos, melhorar fluxos de entrega e reduzir custos fixos.</p>
+<p><strong>03 — Arquitetura de Pontes.</strong> Orquestramos a transição cultural e técnica para operar com agilidade em qualquer território.</p>
+<h2>Resultados</h2>
+<p><strong>Transformações tangíveis.</strong> O custo de não agir costuma ser muito maior que o investimento.</p>
+<ul>
+<li><strong>Economia Real</strong> — redução imediata de custos operacionais.</li>
+<li><strong>Velocidade de Entrega</strong> — o dobro de entregas com a mesma equipe.</li>
+<li><strong>Agência Humana</strong> — pessoas focadas na estratégia; o trabalho braçal fica com a IA.</li>
+<li><strong>Previsibilidade</strong> — parar de “estimar” e começar a “orçar” com base na realidade.</li>
+</ul>
+<h2>Por que confiar</h2>
+<p><strong>Mais de 30 anos domesticando a complexidade.</strong> Cesar Brod, fundador da BrodTec, liderou a entrada de gigantes como Tandem e ACI Worldwide no Brasil, expandiu operações para mais de 10 países e criou a primeira cooperativa de software livre do mundo. Autor e tradutor de obras de referência em engenharia de software.</p>
+<h2>Como começar</h2>
+<p><strong>Workshop de Liderança e IA</strong> — intervenção prática de quatro horas: diagnóstico inicial de eficiência e a primeira versão de um assistente de IA personalizado. Investimento inicial: R$ 2.000,00.</p>
+<p class="brodtec-contact"><a href="https://brodtec.com">brodtec.com</a> · <a href="https://wa.me/5551981361214">WhatsApp +55 51 98136-1214</a> · <a href="mailto:cesar@brodtec.com">cesar@brodtec.com</a> · <a href="https://www.linkedin.com/in/cesarbrod/">LinkedIn</a></p>
+<p class="brodtec-contact">© 2026 BrodTec</p>"""
+
+
 def _safe_id(s: str) -> str:
     """Make a string safe for use as an epub item ID."""
     return re.sub(r"[^a-zA-Z0-9_-]", "_", s)[:60]
@@ -406,6 +481,7 @@ def build_epub(
     cover_image: Optional[bytes] = None,   # validated via cover_art
     cover_ext: str = "jpg",
     cover_mime: str = "image/jpeg",
+    brodtec_page: bool = True,   # append final "Sobre a BrodTec" page
 ) -> Path:
     """
     Build an EPUB file from a list of articles.
@@ -646,6 +722,42 @@ def build_epub(
     finally:
         if sess:
             sess.close()
+
+    # ── Final page: one-page pt-BR summary of brodtec.com ──────────────
+    if brodtec_page:
+        logo = _load_brodtec_logo()
+        if logo is not None:
+            logo_data, logo_ext, logo_mime = logo
+            logo_item = epub.EpubItem(
+                uid="brodtec_logo",
+                file_name=f"images/{_BRODTEC_LOGO_NAME}",
+                media_type=logo_mime,
+                content=logo_data,
+            )
+            book.add_item(logo_item)
+        brodtec_html = f"""<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <title>Sobre a BrodTec</title>
+  <link rel="stylesheet" type="text/css" href="../styles/article.css"/>
+</head>
+<body>
+  {_brodtec_body_html()}
+</body>
+</html>"""
+        brodtec_chapter = epub.EpubHtml(
+            title="Sobre a BrodTec",
+            file_name="chapters/brodtec.xhtml",
+            lang="pt-BR",
+        )
+        brodtec_chapter.content = brodtec_html.encode("utf-8")
+        brodtec_chapter.add_link(href="../styles/article.css", rel="stylesheet",
+                                 type="text/css")
+        book.add_item(brodtec_chapter)
+        chapters.append(brodtec_chapter)
+        spine.append(brodtec_chapter)
 
     # Table of contents (skip cover)
     book.toc = tuple(
