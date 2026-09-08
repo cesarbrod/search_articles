@@ -101,10 +101,13 @@ ul, ol { margin: 0.5em 0 1em 1.5em; }
 li { margin-bottom: 0.3em; }
 .brodtec-logo {
     display: block;
-    margin: 0 auto 1.5em auto;
+    margin: 0 0 1.5em auto;
     width: 38%;
     max-width: 220px;
     height: auto;
+}
+.brodtec-logo-wrap {
+    text-align: right;
 }
 .brodtec-contact {
     text-align: center;
@@ -486,7 +489,7 @@ def _brodtec_body_html() -> str:
     """One-page pt-BR summary of the brodtec.com landing page (no sub-pages).
     The contact form is replaced by plain contact links (a form makes no
     sense on paper)."""
-    return """<img class="brodtec-logo" src="../images/brodtec-logo.png" alt="BrodTec" />
+    return """<div class="brodtec-logo-wrap"><img class="brodtec-logo" src="../images/brodtec-logo.png" alt="BrodTec" /></div>
 <h1>Sobre a BrodTec</h1>
 <p><strong>Transforme sua tecnologia de um centro de custo em um motor de receita.</strong></p>
 <p>Ajudamos organizações a desescalar a complexidade, cruzar fronteiras e libertar talentos humanos por meio do uso estratégico da Inteligência Artificial.</p>

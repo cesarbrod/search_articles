@@ -715,7 +715,9 @@ def _add_brodtec_page(doc: Document):
     doc.add_page_break()
     logo = _load_brodtec_logo()
     if logo:
-        _add_image_paragraph(doc, logo, Inches(2.0))
+        _logo_para = _add_image_paragraph(doc, logo, Inches(2.0))
+        if _logo_para is not None:
+            _logo_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     doc.add_heading("Sobre a BrodTec", level=1)
     hero = doc.add_paragraph(style="Normal")
