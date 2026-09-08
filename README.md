@@ -6,19 +6,29 @@ Scrapes LinkedIn articles into a local SQLite database. Provides both a **CLI** 
 
 ## Setup
 
+Requirements: Python 3.10+ and [LibreOffice](https://www.libreoffice.org/)
+(the latter is only needed for PDF export — DOCX and ePub work without it).
+
 ```bash
 cd linkedin_articles
-pip install -r requirements.txt
-playwright install chromium
+./setup_venv.sh
 ```
+
+This creates a `venv/`, installs everything from `requirements.txt`, and
+downloads the Playwright Chromium browser used for scraping. Re-run it any
+time to rebuild the environment from scratch.
 
 ---
 
 ## Web interface (recommended)
 
 ```bash
-python web_server.py
+./run_web_server.sh
 ```
+
+(Uses the `venv/` from setup; passes extra flags through, e.g.
+`./run_web_server.sh --port 8080`. Or activate manually:
+`source venv/bin/activate && python web_server.py`.)
 
 Opens `http://localhost:5000` automatically. Options:
 
@@ -39,7 +49,7 @@ python web_server.py --no-browser   # don't open the browser automatically
 | **Read an article offline** | List or Search → click the article title |
 | **Search articles** | Search page — supports AND, OR, exact phrases |
 | **Export to ePub / DOCX / PDF** | Search page → Generate ebook panel |
-| **Select & reorder ePub articles** | Search page → Generate ePub → "Preview & reorder" |
+| **Select & reorder ebook articles** | Search page → Generate ebook → "Preview & reorder" |
 
 ### Credentials
 
@@ -48,6 +58,8 @@ Your LinkedIn credentials are entered once via the Sign in page. They are stored
 ---
 
 ## CLI
+
+(Use the setup venv first: `source venv/bin/activate`.)
 
 ```bash
 python main.py [options]
