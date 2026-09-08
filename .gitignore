@@ -5,3 +5,4 @@ __pycache__/
 export_*.epub
 export_*.docx
 export_*.pdf
+export_themed_pdf.py
