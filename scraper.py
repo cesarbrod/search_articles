@@ -462,11 +462,18 @@ def _absolutize_links(soup) -> None:
 
 def _tighten_punct_text(soup) -> None:
     """Collapse spaces before closing punctuation inside text nodes
-    (e.g. 'operacional .' → 'operacional .'). Skips pre/code (verbatim) and
-    whitespace-only nodes (handled by tag-boundary fixers downstream)."""
+    (e.g. 'operacional .' → 'operacional.'). Skips pre/code (verbatim) and
+    whitespace-only nodes (handled by tag-boundary fixers downstream).
+
+    The straight double-quote is ambiguous, so it is handled contextually:
+    a closing one hugs (drop the space), an opening one keeps — or gains —
+    exactly one space before it ('dei"match"' → 'dei "match"').
+    """
     from bs4 import NavigableString as _NS, Comment as _CM
     _CLOSE = ",.;:!?%)]}'\"”’"
     _OPEN = "([{‘“„"
+    _CLOSE_NO_DQ = _CLOSE.replace('"', "")
+    _OPEN_NO_DQ = _OPEN.replace('"', "")
     for s in soup.find_all(string=True):
         if isinstance(s, _CM):
             continue
@@ -475,10 +482,141 @@ def _tighten_punct_text(soup) -> None:
         t = str(s)
         if not t or not t.strip():
             continue
-        new = re.sub(r"\s+([%s])" % re.escape(_CLOSE), r"\1", t)
-        new = re.sub(r"([%s])\s+" % re.escape(_OPEN), r"\1", new)
+        new = re.sub(r"\s+([%s])" % re.escape(_CLOSE_NO_DQ), r"\1", t)
+        new = re.sub(r"([%s])\s+" % re.escape(_OPEN_NO_DQ), r"\1", new)
+        # Closing straight quote: drop a preceding space.
+        new = re.sub(r'\s+"(?=[\s.,;:!?%)\]}’”]|$)', '"', new)
+        # Opening straight quote glued to a word: insert the missing space,
+        # but only when a later quote closes the pair ('dei"match" x' →
+        # 'dei "match" x'; an unmatched '"fim"disse' is left alone).
+        qs = [m.start() for m in re.finditer(r'"', new)]
+        out, last = [], 0
+        for m in re.finditer(r'([^\s\(\[{‘“"\'’”])"(?=\w)', new):
+            if any(q > m.end() - 1 for q in qs):
+                out.append(new[last:m.start()])
+                out.append(m.group(1) + ' "')
+                last = m.end()
+        out.append(new[last:])
+        new = "".join(out)
         if new != t:
             s.replace_with(new)
+
+
+def _separate_glued_quotes(soup) -> None:
+    """Insert missing spaces at tag boundaries around opening quotes.
+
+    Dominant LinkedIn pattern: ``artigo"<a>8 Tips`` or ``diz"<strong>estamos``
+    — an opening quote glued across a tag boundary (same-node cases are
+    handled by _tighten_punct_text). A quote counts as opening when the
+    first quote ahead of it (within ~300 chars of prose) looks like a
+    closer, i.e. is hugged to a word: ``"<a>8 Tips</a>".``. Pre/code
+    untouched. Runs last, so earlier tightening cannot eat the spaces.
+    """
+    from bs4 import NavigableString as _NS, Comment as _CM
+    import re as _re
+
+    _BLOCKS = {"p", "div", "ul", "ol", "li", "pre", "table", "blockquote",
+               "h1", "h2", "h3", "figure", "hr", "figcaption", "br",
+               "tr", "td", "th", "thead", "tbody"}
+    _WORD = _re.compile(r"\w", _re.UNICODE)
+    _CLOSER_BEFORE = ".,;:!?%)\\]}’”"
+
+    def _prose(t):
+        if not isinstance(t, _NS) or isinstance(t, _CM):
+            return False
+        p = t.parent
+        while p is not None and getattr(p, "name", None):
+            if p.name in ("pre", "code"):
+                return False
+            p = p.parent
+        return True
+
+    def _tail_text(node, offset):
+        """Prose text after node[offset] (inclusive node remainder first)."""
+        parts, n = [str(node)[offset + 1:]], 0
+        n += len(parts[0])
+        for t in node.next_elements:
+            if isinstance(t, _CM) or not isinstance(t, _NS):
+                continue
+            if not _prose(t):
+                continue
+            s = str(t)
+            parts.append(s)
+            n += len(s)
+            if n >= 300:
+                break
+        return "".join(parts)
+
+    def _opens_pair(node, offset):
+        """True when the quote at node[offset] opens a pair closed ahead."""
+        tail = _tail_text(node, offset)
+        m = _re.search(r'"', tail)
+        if not m:
+            return False
+        prev = tail[m.start() - 1] if m.start() > 0 else " "
+        return bool(_WORD.match(prev)) or prev in _CLOSER_BEFORE
+
+    def _first_text_char(el):
+        for d in el.descendants:
+            if _prose(d) and str(d).strip():
+                return str(d).lstrip()[:1]
+        return ""
+
+    def _last_text_char(el):
+        txt = el.get_text().rstrip()
+        return txt[-1:] if txt else ""
+
+    # Direction A: prose text ending with an opening quote, glued to a
+    # following inline element starting with a word char.
+    for t in list(soup.descendants):
+        if not _prose(t):
+            continue
+        s = str(t)
+        if len(s) < 2 or not s.endswith('"') or s[-2:-1] == " ":
+            continue
+        if not _WORD.match(s[-2:-1] or ""):
+            continue
+        nxt = t.next_sibling
+        while isinstance(nxt, _CM) or (isinstance(nxt, _NS) and not str(nxt).strip()):
+            nxt = nxt.next_sibling
+        if isinstance(nxt, _NS):
+            if not nxt or not _WORD.match(str(nxt)[:1]):
+                continue
+        elif getattr(nxt, "name", None):
+            if nxt.name in _BLOCKS:
+                continue
+            if not _WORD.match(_first_text_char(nxt) or ""):
+                continue
+        else:
+            continue
+        if _opens_pair(t, len(s) - 1):
+            t.replace_with(s[:-1] + ' "')
+
+    # Direction B: inline element starting with an opening quote, glued to
+    # preceding prose ending with a word char.
+    for el in list(soup.find_all(True)):
+        if el.name in _BLOCKS:
+            continue
+        if _first_text_char(el) != '"':
+            continue
+        role_opening = None
+        for d in el.descendants:
+            if _prose(d) and str(d).strip():
+                off = str(d).find('"')
+                role_opening = _opens_pair(d, off) if off >= 0 else False
+                break
+        if not role_opening:
+            continue
+        p = el.previous_sibling
+        while isinstance(p, _CM) or (isinstance(p, _NS) and not str(p).strip()):
+            p = p.previous_sibling
+        glued = False
+        if isinstance(p, _NS):
+            glued = bool(p) and bool(_WORD.match(str(p).rstrip()[-1:]))
+        elif getattr(p, "name", None):
+            glued = bool(_WORD.match(_last_text_char(p) or ""))
+        if glued:
+            el.insert_before(" ")
 
 
 def _extract_title(anchor) -> str:
@@ -775,6 +913,7 @@ def _extract_article_rich(page: Page) -> dict:
                 del tag.attrs[attr]
 
     _tighten_punct_text(body)
+    _separate_glued_quotes(body)
 
     return {"html": str(body), "banner_image": banner_image, "images": images}
 
@@ -847,6 +986,7 @@ def _extract_article_body(page: Page) -> str:
         a["rel"] = "noopener noreferrer"
 
     _tighten_punct_text(body)
+    _separate_glued_quotes(body)
 
     return str(body)
 

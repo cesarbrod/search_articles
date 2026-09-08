@@ -118,6 +118,7 @@ def _clean_reader_html(content: str) -> str:
                 continue
             a["href"] = urljoin("https://www.linkedin.com/", href)
         _close = ",.;:!?%)]}'\"”’"
+        _close_no_dq = _close.replace('"', "")
         for s in soup.find_all(string=True):
             if isinstance(s, Comment):
                 continue
@@ -126,9 +127,27 @@ def _clean_reader_html(content: str) -> str:
             t = str(s)
             if not t or not t.strip():
                 continue
-            new = re.sub(r"\s+([%s])" % re.escape(_close), r"\1", t)
+            new = re.sub(r"\s+([%s])" % re.escape(_close_no_dq), r"\1", t)
+            # Straight double-quote, contextually: closing hugs, opening
+            # keeps — or gains — its preceding space ('dei"match"').
+            new = re.sub(r'\s+"(?=[\s.,;:!?%)\]}’”]|$)', '"', new)
+            qs = [m.start() for m in re.finditer(r'"', new)]
+            out, last = [], 0
+            for m in re.finditer(r'([^\s\(\[{‘“"\'’”])"(?=\w)', new):
+                if any(q > m.end() - 1 for q in qs):
+                    out.append(new[last:m.start()])
+                    out.append(m.group(1) + ' "')
+                    last = m.end()
+            out.append(new[last:])
+            new = "".join(out)
             if new != t:
                 s.replace_with(new)
+        try:
+            from scraper import _separate_glued_quotes as _sep_q
+        except ImportError:  # pragma: no cover
+            _sep_q = None
+        if _sep_q is not None:
+            _sep_q(soup)
         return str(soup)
     except Exception:
         return content

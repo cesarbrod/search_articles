@@ -400,6 +400,10 @@ def _add_hoisted_images(doc: Document, el):
 # none after openers) when a whitespace-only node sits at a tag boundary.
 _CLOSING_PUNCT = ",.;:!?%)]}'\"\"''"
 _OPENING_PUNCT = "([{‘“\""
+# Straight double-quote excluded: it opens as often as it closes, so it is
+# resolved contextually inside _fix_punct_spacing instead.
+_CLOSING_NO_DQ = _CLOSING_PUNCT.replace('"', "")
+_OPENING_NO_DQ = _OPENING_PUNCT.replace('"', "")
 
 
 _LINKEDIN_BASE = "https://www.linkedin.com"
@@ -443,8 +447,15 @@ def _absolutize_links(soup):
 def _tighten_punct_text(soup):
     """Collapse spaces before closing punctuation inside text nodes
     (e.g. 'operacional .' → 'operacional.'). Skips pre/code (verbatim)
-    and whitespace-only nodes."""
+    and whitespace-only nodes.
+
+    The straight double-quote is ambiguous, so it is handled contextually:
+    a closing one hugs (drop the space), an opening one keeps — or gains —
+    exactly one space before it ('dei"match"' → 'dei "match"').
+    """
     from bs4 import Comment as _CM
+    _CLOSE_NO_DQ = _CLOSING_PUNCT.replace('"', "")
+    _OPEN_NO_DQ = _OPENING_PUNCT.replace('"', "")
     for s in soup.find_all(string=True):
         if isinstance(s, _CM):
             continue
@@ -453,8 +464,22 @@ def _tighten_punct_text(soup):
         t = str(s)
         if not t or not t.strip():
             continue
-        new = re.sub(r"\s+([%s])" % re.escape(_CLOSING_PUNCT), r"\1", t)
-        new = re.sub(r"([%s])\s+" % re.escape(_OPENING_PUNCT), r"\1", new)
+        new = re.sub(r"\s+([%s])" % re.escape(_CLOSE_NO_DQ), r"\1", t)
+        new = re.sub(r"([%s])\s+" % re.escape(_OPEN_NO_DQ), r"\1", new)
+        # Closing straight quote: drop a preceding space.
+        new = re.sub(r'\s+"(?=[\s.,;:!?%)\]}’”]|$)', '"', new)
+        # Opening straight quote glued to a word: insert the missing space,
+        # but only when a later quote closes the pair ('dei"match" x' →
+        # 'dei "match" x'; an unmatched '"fim"disse' is left alone).
+        qs = [m.start() for m in re.finditer(r'"', new)]
+        out, last = [], 0
+        for m in re.finditer(r'([^\s\(\[{‘“"\'’”])"(?=\w)', new):
+            if any(q > m.end() - 1 for q in qs):
+                out.append(new[last:m.start()])
+                out.append(m.group(1) + ' "')
+                last = m.end()
+        out.append(new[last:])
+        new = "".join(out)
         if new != t:
             s.replace_with(new)
 
@@ -465,12 +490,32 @@ def _fix_punct_spacing(soup):
     LinkedIn emits spaces as separate spans, sometimes before `,`/`.`/`)`
     or after `(`/quotes. Skips pre/code (verbatim) and only touches
     whitespace-only nodes, so emoticons and in-word spacing are safe.
+
+    The straight double-quote is resolved contextually: the space goes
+    away before a closing quote ('...Jobs ." ' → hug) and after an opening
+    one, but is kept before an opening quote and after a closing one.
     """
     from bs4 import NavigableString as _NS, Comment as _CM
 
     def _meaningful(t):
         return (isinstance(t, _NS) and not isinstance(t, _CM)
                 and bool(str(t).strip()))
+
+    def _after_dquote(nxt):
+        """Char following a leading '"' (peeks past lone quotes)."""
+        rest = str(nxt).lstrip()[1:].lstrip()
+        if rest:
+            return rest[:1]
+        fol = nxt.find_next(string=_meaningful)
+        return str(fol).lstrip()[:1] if fol is not None else ""
+
+    def _before_dquote(prev):
+        """Char preceding a trailing '"' (peeks past lone quotes)."""
+        rest = str(prev).rstrip()[:-1].rstrip()
+        if rest:
+            return rest[-1:]
+        prv = prev.find_previous(string=_meaningful)
+        return str(prv).rstrip()[-1:] if prv is not None else ""
 
     for s in soup.find_all(string=True):
         if isinstance(s, _CM):
@@ -483,7 +528,17 @@ def _fix_punct_spacing(soup):
         nxt = s.find_next(string=_meaningful)
         prev_ch = str(prev).rstrip()[-1:] if prev is not None else ""
         next_ch = str(nxt).lstrip()[:1] if nxt is not None else ""
-        if next_ch in _CLOSING_PUNCT or prev_ch in _OPENING_PUNCT:
+        if next_ch in _CLOSING_NO_DQ or prev_ch in _OPENING_NO_DQ:
+            drop = True
+        elif next_ch == '"':
+            after = _after_dquote(nxt)
+            drop = after == "" or after in _CLOSING_NO_DQ
+        elif prev_ch == '"':
+            before = _before_dquote(prev)
+            drop = before == "" or before in _OPENING_NO_DQ
+        else:
+            drop = False
+        if drop:
             s.extract()
 
 
@@ -605,6 +660,12 @@ def _add_body_html(doc: Document, content: str):
         _lift_blocks(soup)
         _fix_punct_spacing(soup)
         _tighten_punct_text(soup)
+        try:
+            from scraper import _separate_glued_quotes as _sep_q
+        except ImportError:  # pragma: no cover
+            _sep_q = None
+        if _sep_q is not None:
+            _sep_q(soup)
         root = soup.body or soup
         from bs4 import Comment as _CM
         for child in list(root.children):
