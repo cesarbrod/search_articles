@@ -32,6 +32,7 @@
         <td class="actions">
           <a href="{{ url_for('article_list', profile=p) }}">List</a>
           <a href="{{ url_for('search', profile=p) }}">Search</a>
+          <a href="{{ url_for('posts', profile=p) }}">Posts</a>
           {% if has_credentials %}
           <button class="btn-action" onclick="runUpdate('{{ p }}')">Sync</button>
           <button class="btn-action" onclick="runFetchContent('{{ p }}')">Fetch text</button>
@@ -43,6 +44,36 @@
   {% else %}
   <p class="empty">No profiles in the database yet.</p>
   {% endif %}
+
+  <h2 style="margin-top:2rem">Posts</h2>
+  {% if post_profiles %}
+  <table class="profile-table">
+    <thead>
+      <tr>
+        <th>Profile</th>
+        <th>Posts</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in post_profiles %}
+      <tr>
+        <td>
+          <a href="https://www.linkedin.com/in/{{ p }}/" target="_blank" rel="noopener">{{ p }}</a>
+        </td>
+        <td id="post-count-{{ p }}">{{ post_counts[p] }}</td>
+        <td class="actions">
+          <a href="{{ url_for('posts', profile=p) }}">Browse</a>
+          <a href="{{ url_for('posts', profile=p) }}">Search</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No posts in the database yet. <a href="{{ url_for('posts') }}">Go to Posts</a> to sync your regular LinkedIn posts.</p>
+  {% endif %}
+  <p class="hint"><a href="{{ url_for('posts') }}">Posts</a> — download &amp; keyword-search your regular posts (no ebook export).</p>
 
   {% if has_credentials %}
   <div class="sync-box">

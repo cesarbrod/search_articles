@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Posts — LinkedIn Posts{% endblock %}
+
+{% block content %}
+<section class="search-section">
+  <h1>Posts</h1>
+  <p class="hint">Your regular LinkedIn posts (not articles). Sync them, then keyword-search the text — same syntax as article search. Posts are never exported to ebooks.</p>
+
+  {% if has_credentials %}
+  <div class="sync-box">
+    <h2>Sync posts</h2>
+    <form id="post-sync-form" onsubmit="runPostSync(document.getElementById('post-profile-input').value, false); return false;">
+      <input id="post-profile-input" type="text" placeholder="LinkedIn handle (e.g. cesarbrod)" required />
+      <button type="submit">Sync posts</button>
+      <button type="button" class="btn-action" onclick="runPostSync(document.getElementById('post-profile-input').value, true)">Sync full history</button>
+    </form>
+    <p class="hint" style="margin-top:.5rem">Incremental sync fetches only new posts (fast). Full history walks your entire activity backlog batch by batch — for 50–150 posts expect a <strong>really very long time (easily 10–30 minutes)</strong>: keep the browser window open and the computer awake until the confirmation appears. Run it once; later syncs are incremental again.</p>
+  </div>
+  {% else %}
+  <p class="hint"><a href="{{ url_for('login', next=url_for('posts')) }}">Sign in</a> to sync posts.</p>
+  {% endif %}
+
+  <form method="GET" action="{{ url_for('posts') }}" class="search-form">
+    <div class="search-row">
+      <input name="q" type="search" value="{{ query }}" placeholder='e.g.  AI  or  "machine learning"  or  "AI" OR "data"'
+             autofocus autocomplete="off" />
+      <button type="submit">Search posts</button>
+    </div>
+    <div class="search-options">
+      <label>
+        Lines:
+        <input name="lines" type="number" min="1" max="50" value="{{ lines }}" class="lines-input" />
+      </label>
+      <label>
+        Profile:
+        <select name="profile">
+          <option value="">All profiles</option>
+          {% for p in profiles %}
+          <option value="{{ p }}" {{ 'selected' if p == profile_filter }}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+  </form>
+
+  <div class="search-hint">
+    <strong>Syntax:</strong>
+    <code>word1 word2</code> → AND &nbsp;|&nbsp;
+    <code>"exact phrase"</code> → exact &nbsp;|&nbsp;
+    <code>"a" OR "b"</code> → OR
+  </div>
+
+  <div id="post-status-msg" class="status-msg hidden"></div>
+  <div id="post-spinner" class="spinner hidden">Working…</div>
+
+  {% if query %}
+    {% if results %}
+    <p class="count">{{ results|length }} post(s) for <em>{{ query }}</em></p>
+    {% else %}
+    <p class="empty">No posts matched <em>{{ query }}</em>.</p>
+    {% endif %}
+  {% elif not profile_filter and results %}
+    <p class="count">Showing {{ results|length }} recent post(s) — enter a query to search.</p>
+  {% elif profile_filter and results %}
+    <p class="count">{{ results|length }} recent post(s) for <strong>{{ profile_filter }}</strong> — enter a query to search.</p>
+  {% elif not results %}
+    <p class="empty">No posts stored yet. Sync a profile above to download them.</p>
+  {% endif %}
+
+  {% for row in results %}
+  <article class="result-card">
+    <div class="result-meta">
+      {% if show_profile_col %}
+      <span class="result-profile">{{ row.profile }}</span>
+      {% endif %}
+      <span class="result-date">{{ row.published or 'unknown date' }}</span>
+      <a href="{{ row.url }}" target="_blank" rel="noopener" class="ext-link" title="Open on LinkedIn">Open on LinkedIn ↗</a>
+    </div>
+    <div class="result-snippet">
+      {% for line in row.snippet_lines %}
+        <p>{{ line }}</p>
+      {% endfor %}
+      {% if row.snippet_more > 0 %}
+      <p class="more">… {{ row.snippet_more }} more line(s)</p>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+
+<script>
+  function showPostStatus(msg, isError) {
+    const el = document.getElementById('post-status-msg');
+    el.textContent = msg;
+    el.className = 'status-msg ' + (isError ? 'error' : 'success');
+  }
+
+  function setPostSpinner(on) {
+    document.getElementById('post-spinner').className = 'spinner' + (on ? '' : ' hidden');
+  }
+
+  async function runPostSync(profile, full) {
+    if (!profile) return;
+    setPostSpinner(true);
+    showPostStatus(
+      full
+        ? 'Syncing FULL post history for ' + profile + '… (a browser window will open — this takes a REALLY very long time, 10–30+ min for a big backlog: please wait for the confirmation, do not close anything)'
+        : 'Syncing posts for ' + profile + '… (a browser window will open)',
+      false);
+    try {
+      const fd = new FormData();
+      fd.append('profile', profile);
+      if (full) fd.append('full', '1');
+      const res = await fetch('/posts/update', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) {
+        showPostStatus('Error: ' + data.error, true);
+      } else if (data.partial) {
+        showPostStatus('⚠ Partial: ' + data.new + ' new post(s) saved (total ' + data.total + '). ' + (data.warning || 'Run Sync full history again to resume where it stopped.'), false);
+        setTimeout(() => location.reload(), 4000);
+      } else if (data.up_to_date) {
+        showPostStatus('✔ ' + profile + ' posts are already up to date.', false);
+        setTimeout(() => location.reload(), 1500);
+      } else {
+        let msg = '✔ ' + profile + ': ' + data.new + ' new post(s). Total: ' + data.total + '.';
+        if (data.rounds !== undefined) {
+          msg += ' (' + data.rounds + ' scroll rounds, stopped: ' + data.stop_reason + ')';
+        }
+        showPostStatus(msg, false);
+        setTimeout(() => location.reload(), 1500);
+      }
+    } catch (e) {
+      showPostStatus('Request failed: ' + e, true);
+    }
+    setPostSpinner(false);
+  }
+</script>
+{% endblock %}

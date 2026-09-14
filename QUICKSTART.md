@@ -88,6 +88,7 @@ You should see:
 - Your LinkedIn articles
 - Search functionality
 - ePub export options
+- Posts page: regular LinkedIn posts with keyword search ✨
 - Dark blue code blocks with white text ✨
 - Banner images in articles ✨
 - Correct dates on all articles ✨

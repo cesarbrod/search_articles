@@ -33,6 +33,7 @@ from db import (
     DEFAULT_PROFILE,
     init_db,
     upsert_article,
+    upsert_post,
     update_content,
     update_published,
     get_article_by_url,
@@ -41,15 +42,21 @@ from db import (
     get_articles_without_content,
     get_articles_needing_html_refresh,
     get_known_urls_by_profile,
+    get_known_post_urls_by_profile,
     get_latest_fetched_at,
     get_articles_by_ids,
     get_articles_by_profile_all,
     get_most_recent_articles,
     get_all_articles,
     list_articles,
+    list_posts,
     search_articles,
+    search_posts,
     count_articles,
+    count_posts,
+    count_all_posts,
     list_profiles,
+    list_post_profiles,
 )
 from scraper import LinkedInSession, check_for_updates
 
@@ -160,12 +167,18 @@ def index():
     init_db()
     profiles = list_profiles()
     counts = {p: count_articles(p) for p in profiles} if profiles else {}
+    post_profiles = list_post_profiles()
+    post_counts = {p: count_posts(p) for p in post_profiles} if post_profiles else {}
+    post_total = count_all_posts()
     # Flag whether the startup check has already been offered this session
     check_done = session.get("startup_check_done", False)
     return render_template(
         "index.html",
         profiles=profiles,
         counts=counts,
+        post_profiles=post_profiles,
+        post_counts=post_counts,
+        post_total=post_total,
         has_credentials=credentials_stored(),
         show_update_check=credentials_stored() and profiles and not check_done,
     )
@@ -252,6 +265,197 @@ def search():
         show_profile_col=show_profile_col,
         has_credentials=credentials_stored(),
     )
+
+
+@app.route("/posts", methods=["GET"])
+def posts():
+    """Simple post browser: keyword search over regular LinkedIn posts.
+
+    No ebook export — posts are never printed. Query params:
+      q       : search query (same syntax as article search; empty = browse)
+      profile : profile handle filter (empty = all profiles)
+      lines   : snippet lines per result (default 3)
+    """
+    init_db()
+    query = request.args.get("q", "").strip()
+    profile_filter = request.args.get("profile", "") or None
+    try:
+        lines = int(request.args.get("lines", 3))
+    except (TypeError, ValueError):
+        lines = 3
+    lines = max(1, min(lines, 50))
+    profiles = list_post_profiles()
+    results = []
+    show_profile_col = False
+
+    if query:
+        rows = search_posts(query, profile=profile_filter)
+        show_profile_col = (
+            profile_filter is None
+            and len({r["profile"] for r in rows}) > 1
+        )
+    else:
+        rows = list_posts(profile_filter, limit=2000)
+        show_profile_col = (
+            profile_filter is None
+            and len({r["profile"] for r in rows}) > 1
+        )
+
+    # Pre-process snippets: first N readable lines of the post text
+    processed = []
+    for row in rows:
+        d = dict(row)
+        snippet_lines, snippet_more = make_snippet(d.get("text") or "", lines)
+        d["snippet_lines"] = snippet_lines
+        d["snippet_more"] = snippet_more
+        processed.append(d)
+    results = processed
+
+    return render_template(
+        "posts.html",
+        query=query,
+        results=results,
+        profile_filter=profile_filter or "",
+        lines=lines,
+        profiles=profiles,
+        show_profile_col=show_profile_col,
+        has_credentials=credentials_stored(),
+    )
+
+
+@app.route("/posts/update", methods=["POST"])
+def posts_update():
+    """Sync regular posts for a profile from its activity listing.
+
+    Form params: profile, full ("1" = full-history resync: scroll the whole
+    listing, walking PAST already-known URLs toward older history; otherwise
+    incremental sync that stops at the first known post). Posts are
+    persisted incrementally as scraped, so even if the page crashes deep
+    in history ("Target crashed"), progress is kept and the next full run
+    resumes cheaply where it left off.
+    """
+    if not credentials_stored():
+        return jsonify({"error": "No credentials. Please sign in first."}), 401
+
+    profile = (request.form.get("profile", "") or "").strip() or DEFAULT_PROFILE
+    full = (request.form.get("full", "") or "").strip() == "1"
+    email, password = get_credentials()
+
+    known = get_known_post_urls_by_profile().get(profile, set())
+    is_first_sync = len(known) == 0
+
+    # Full-history syncs always record diagnostics: a per-round log plus
+    # start/end page snapshots under debug_posts/, so a short run can be
+    # diagnosed without re-running (and without sharing credentials).
+    debug_log: list = []
+    snapshot_dir = None
+    if full:
+        import datetime as _dt
+
+        snapshot_dir = (
+            Path(__file__).parent.parent
+            / "debug_posts"
+            / f"{profile}_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+
+    saved_new = 0
+
+    def _persist(post: dict) -> None:
+        nonlocal saved_new
+        if upsert_post(profile, post["text"], post["url"], post.get("published")):
+            saved_new += 1
+
+    try:
+        with LinkedInSession(verbose=False) as sess:
+            sess.login(email, password)
+            posts = sess.scrape_posts(
+                profile,
+                known_urls=None if is_first_sync else known,
+                stop_at_known=not full,
+                max_scrolls=300 if full else 60,
+                debug_log=debug_log if full else None,
+                snapshot_dir=snapshot_dir,
+                on_post=_persist if full else None,
+            )
+    except Exception as e:
+        if full:
+            debug_log.append({"event": "done", "reason": f"crashed: {e}"})
+            _write_rounds_log(snapshot_dir, debug_log)
+        if full and saved_new:
+            # Crash deep in history with progress already persisted:
+            # report partial success so the next run resumes past it.
+            total = count_posts(profile)
+            return jsonify(
+                {
+                    "new": saved_new,
+                    "total": total,
+                    "profile": profile,
+                    "partial": True,
+                    "warning": f"Stopped early ({e}). Progress saved — "
+                    "run Sync full history again to resume.",
+                }
+            )
+        return jsonify({"error": str(e)}), 500
+
+    _write_rounds_log(snapshot_dir, debug_log)
+
+    if not posts and not is_first_sync and not full:
+        total = count_posts(profile)
+        return jsonify({"new": 0, "total": total, "profile": profile, "up_to_date": True})
+
+    if not posts and not saved_new:
+        total = count_posts(profile)
+        if full and total:
+            # Walked the whole history, nothing new (already complete).
+            return jsonify({"new": 0, "total": total, "profile": profile, "up_to_date": True})
+        return jsonify({"error": "No posts found. Login may have failed."}), 404
+
+    if not full:
+        new_count = 0
+        for p in posts:
+            if upsert_post(profile, p["text"], p["url"], p.get("published")):
+                new_count += 1
+    else:
+        # Full mode persisted incrementally via on_post; recounting via
+        # upsert would double-count nothing but saved_new is exact.
+        new_count = saved_new
+
+    total = count_posts(profile)
+    resp: dict = {"new": new_count, "total": total, "profile": profile}
+    if full:
+        reason = next(
+            (
+                e.get("reason")
+                for e in debug_log
+                if isinstance(e, dict) and e.get("event") == "done"
+            ),
+            "?",
+        )
+        resp.update(
+            {
+                "rounds": sum(
+                    1 for e in debug_log if isinstance(e, dict) and "round" in e
+                ),
+                "stop_reason": reason,
+                "snapshots": str(snapshot_dir) if snapshot_dir else None,
+            }
+        )
+    return jsonify(resp)
+
+
+def _write_rounds_log(snapshot_dir, debug_log) -> None:
+    """Persist the per-round debug log beside the page snapshots (best-effort)."""
+    if snapshot_dir is None or not debug_log:
+        return
+    try:
+        import json as _json
+
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "rounds.json").write_text(
+            _json.dumps(debug_log, indent=1), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
 
 @app.route("/article/<int:article_id>")

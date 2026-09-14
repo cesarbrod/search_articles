@@ -13,13 +13,26 @@ DEFAULT_PROFILE = "cesarbrod"
 
 
 def _norm_url(url: str) -> str:
-    """Decode percent-encoding until stable, stripping query params."""
+    """Decode percent-encoding until stable, stripping query params.
+
+    Trailing slashes are stripped: LinkedIn serves the same article as
+    .../pulse/<slug> and .../pulse/<slug>/, and without this both variants
+    were stored as separate rows (52 duplicate pairs seen 2026-09-14).
+
+    LinkedIn per-card "View analytics" links
+    (/analytics/post-summary/urn:li:activity:<id>/) are canonicalised to the
+    real post permalink (https://www.linkedin.com/feed/update/urn:li:activity:<id>/)
+    so re-syncs after the scraper fix dedupe against previously stored rows.
+    """
     import re
-    url = re.sub(r"\?.*$", "", url.strip())
+    url = re.sub(r"\?.*$", "", url.strip()).rstrip("/")
     prev = None
     while prev != url:
         prev = url
-        url = unquote(url)
+        url = unquote(url).rstrip("/")
+    m = re.search(r"urn:li:activity:(\d+)", url, re.IGNORECASE)
+    if m and "analytics" in url:
+        return f"https://www.linkedin.com/feed/update/urn:li:activity:{m.group(1)}"
     return url
 
 
@@ -41,6 +54,16 @@ def init_db() -> None:
                 content      TEXT,
                 content_type TEXT    NOT NULL DEFAULT 'text',
                 fetched_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS posts (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile    TEXT    NOT NULL DEFAULT '',
+                text       TEXT    NOT NULL DEFAULT '',
+                url        TEXT    NOT NULL UNIQUE,
+                published  TEXT,
+                fetched_at TEXT    NOT NULL DEFAULT (datetime('now'))
             )
         """)
         conn.commit()
@@ -321,6 +344,151 @@ def list_profiles() -> list[str]:
             "SELECT DISTINCT profile FROM articles ORDER BY profile"
         ).fetchall()
     return [r["profile"] for r in rows]
+
+
+# ── LinkedIn posts (regular posts, not articles) ─────────────────────────────
+# Simple store: full post text is captured straight from the activity listing,
+# so no separate content-fetch step is needed. Search mirrors search_articles
+# (AND between terms, OR between groups, "quoted phrases" for exact match).
+
+def upsert_post(
+    profile: str,
+    text: str,
+    url: str,
+    published: Optional[str],
+) -> bool:
+    """Insert or update a post. Returns True if it was a new record."""
+    url = _norm_url(url)
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM posts WHERE url = ?", (url,)
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                """UPDATE posts
+                   SET profile=?, text=?, published=COALESCE(?, published),
+                       fetched_at=datetime('now')
+                   WHERE url=?""",
+                (profile, text, published, url),
+            )
+            conn.commit()
+            return False
+        else:
+            conn.execute(
+                "INSERT INTO posts (profile, text, url, published) VALUES (?, ?, ?, ?)",
+                (profile, text, url, published),
+            )
+            conn.commit()
+            return True
+
+
+def get_post_by_url(url: str):
+    """Return a single post row by URL (normalised like stored URLs), or None."""
+    url = _norm_url(url)
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT id, profile, text, url, published, fetched_at "
+            "FROM posts WHERE url=?",
+            (url,),
+        ).fetchone()
+
+
+def list_posts(profile: Optional[str] = None, limit: int = 1000) -> list:
+    """List posts, newest first. profile=None lists across all profiles."""
+    with get_connection() as conn:
+        if profile:
+            return conn.execute(
+                "SELECT id, profile, text, url, published, fetched_at FROM posts "
+                "WHERE profile=? ORDER BY published DESC, id DESC LIMIT ?",
+                (profile, limit),
+            ).fetchall()
+        return conn.execute(
+            "SELECT id, profile, text, url, published, fetched_at FROM posts "
+            "ORDER BY profile ASC, published DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+
+def search_posts(query: str, profile: Optional[str] = None) -> list:
+    """
+    Search post text with the same syntax as search_articles:
+      - Bare words or "quoted phrases" → AND between all terms
+      - "term1" OR "term2"             → OR between groups separated by OR
+    Returns rows ordered by profile, then published date desc.
+    """
+    groups = _parse_query(query)
+    conditions = []
+    params = []
+
+    for and_terms in groups:
+        and_clauses = []
+        for term, _ in and_terms:
+            pattern = f"%{term}%"
+            and_clauses.append("(LOWER(text) LIKE LOWER(?))")
+            params.append(pattern)
+        if and_clauses:
+            conditions.append("(" + " AND ".join(and_clauses) + ")")
+
+    if not conditions:
+        return []
+
+    where = " OR ".join(conditions)
+
+    if profile:
+        where = f"profile = ? AND ({where})"
+        params = [profile] + params
+
+    sql = f"""
+        SELECT id, profile, text, url, published, fetched_at
+        FROM posts
+        WHERE {where}
+        ORDER BY profile ASC, published DESC, id DESC
+    """
+
+    with get_connection() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def count_posts(profile: str) -> int:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM posts WHERE profile=?", (profile,)
+        ).fetchone()[0]
+
+
+def count_all_posts() -> int:
+    with get_connection() as conn:
+        return conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+
+
+def list_post_profiles() -> list[str]:
+    """Return all distinct profiles stored in the posts table."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT profile FROM posts ORDER BY profile"
+        ).fetchall()
+    return [r["profile"] for r in rows]
+
+
+def get_known_post_urls_by_profile() -> dict[str, set[str]]:
+    """Return {profile: set(url)} for all posts in the DB (URLs already normalised)."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT profile, url FROM posts").fetchall()
+    result: dict[str, set[str]] = {}
+    for row in rows:
+        result.setdefault(row["profile"], set()).add(row["url"])
+    return result
+
+
+def get_latest_post_fetched_at(profile: str) -> Optional[str]:
+    """Return the most recent fetched_at timestamp for a profile's posts, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(fetched_at) as latest FROM posts WHERE profile = ?",
+            (profile,),
+        ).fetchone()
+    return row["latest"] if row else None
 
 
 def _parse_query(query: str) -> list[list[tuple[str, bool]]]:

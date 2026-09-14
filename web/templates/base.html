@@ -26,6 +26,7 @@
       <div class="nav-links">
         <a href="{{ url_for('article_list') }}">List</a>
         <a href="{{ url_for('search') }}">Search</a>
+        <a href="{{ url_for('posts') }}">Posts</a>
         {% if has_credentials %}
           <span class="cred-status ok" title="Credentials active">&#10003; Signed in</span>
           <a href="{{ url_for('logout') }}">Clear credentials</a>

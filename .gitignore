@@ -1,4 +1,6 @@
 articles.db
+articles.db.bak-*
+debug_posts/
 venv/
 __pycache__/
 *.pyc

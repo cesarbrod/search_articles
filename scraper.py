@@ -34,6 +34,11 @@ def articles_url_for(profile: str) -> str:
     return f"https://www.linkedin.com/in/{profile}/recent-activity/articles/"
 
 
+def posts_url_for(profile: str) -> str:
+    """Build the regular-posts activity URL for any LinkedIn profile handle."""
+    return f"https://www.linkedin.com/in/{profile}/recent-activity/all/"
+
+
 # ── Persistent session ─────────────────────────────────────────────────────────
 
 class LinkedInSession:
@@ -56,7 +61,14 @@ class LinkedInSession:
     def start(self) -> "LinkedInSession":
         """Launch the browser (does not log in yet)."""
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=False, slow_mo=100)
+        self._browser = self._pw.chromium.launch(
+            headless=False,
+            slow_mo=100,
+            # /dev/shm is tiny in many containers/desktops — without this,
+            # long infinite-scroll pages crash the renderer ("Target
+            # crashed"). Chrome falls back to /tmp instead.
+            args=["--disable-dev-shm-usage"],
+        )
         self._context = self._browser.new_context(user_agent=_USER_AGENT)
         self._page = self._context.new_page()
         return self
@@ -226,6 +238,131 @@ class LinkedInSession:
 
         return _extract_articles(page, known_urls=known_urls, verbose=self.verbose)
 
+    def scrape_posts(
+        self,
+        profile: str,
+        known_urls: Optional[set] = None,
+        max_scrolls: int = 60,
+        debug_log: Optional[list] = None,
+        snapshot_dir=None,
+        stop_at_known: bool = True,
+        on_post: Optional[Callable] = None,
+    ) -> list[dict]:
+        """
+        Scrape regular (non-article) posts from a LinkedIn profile's activity page.
+
+        known_urls: set of normalised URLs already in the DB for this profile.
+                    When provided, scraping stops as soon as a known URL is
+                    encountered — posts are listed newest-first.
+                    Pass None (or omit) to scrape the full listing (first sync
+                    or full-history resync).
+
+        max_scrolls: safety cap on listing scrolls — raise for full-history
+                     resyncs of profiles with hundreds of posts.
+
+        debug_log: optional list that receives one dict per scroll round
+                   ({round, height, anchors, new_urls, more_clicks,
+                   seen_total, posts_total}) plus a final
+                   {event: done, reason: ...} entry.
+        snapshot_dir: optional directory (str/Path) receiving listing
+                      start/end screenshots + HTML snapshots. Never fails
+                      the scrape — snapshot errors are swallowed.
+        stop_at_known: when True (incremental mode), stop scrolling at the
+                       first already-known URL. When False (full-history
+                       resync), scroll PAST known URLs to reach older
+                       history, skipping only their (expensive) text
+                       extraction — this also makes full syncs resumable:
+                       a re-run cheaply walks over already-saved posts.
+        on_post: optional callback invoked with each newly extracted post
+                 dict as soon as it is scraped, so callers can persist
+                 incrementally instead of losing everything if the page
+                 later crashes ("Target crashed" on hundred-post listings).
+
+        Returns list of {text, url, published} for new posts only. The full
+        post text is captured straight from the listing, so no separate
+        content-fetch step is needed.
+        """
+        if not self.logged_in:
+            raise RuntimeError("Not logged in. Call login() first.")
+
+        target_url = posts_url_for(profile)
+        page = self._page
+
+        # Memory diet for hundred-post listings: images/video/autoplay
+        # media are what exhaust the renderer ("Target crashed") deep in
+        # history. Text extraction only needs innerText, so abort them —
+        # scripts/XHR (needed to load further batches) are untouched.
+        try:
+            page.route(
+                re.compile(
+                    r"\.(png|jpe?g|gif|webp|svg|ico|avif|mp4|webm|mov)(\?.*)?$"
+                    r"|media\.licdn\.com",
+                    re.IGNORECASE,
+                ),
+                lambda route: route.abort(),
+            )
+        except Exception:
+            pass
+
+        if self.verbose:
+            print(f"Loading posts page for '{profile}'…")
+
+        page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            page.wait_for_selector(
+                "a[href*='/posts/'], a[href*='urn%3Ali%3Aactivity'], a[href*='urn:li:activity']",
+                state="visible",
+                timeout=15000,
+            )
+        except PWTimeout:
+            pass
+        time.sleep(2)
+
+        if snapshot_dir is not None:
+            _snap_errors: list[str] = []
+            try:
+                from pathlib import Path as _Path
+
+                _snap = _Path(snapshot_dir)
+                _snap.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(_snap / "listing_start.png"))
+                (_snap / "listing_start.html").write_text(
+                    page.content(), encoding="utf-8"
+                )
+            except Exception as e:
+                _snap_errors.append(f"start snapshots failed: {e!r}")
+
+        try:
+            return _extract_posts(
+                page,
+                known_urls=known_urls,
+                verbose=self.verbose,
+                max_scrolls=max_scrolls,
+                debug_log=debug_log,
+                stop_at_known=stop_at_known,
+                on_post=on_post,
+            )
+        finally:
+            if snapshot_dir is not None:
+                try:
+                    from pathlib import Path as _Path
+
+                    _snap = _Path(snapshot_dir)
+                    _snap.mkdir(parents=True, exist_ok=True)
+                    page.screenshot(path=str(_snap / "listing_end.png"))
+                    (_snap / "listing_end.html").write_text(
+                        page.content(), encoding="utf-8"
+                    )
+                except Exception as e:
+                    _snap_errors.append(f"end snapshots failed: {e!r}")
+                if _snap_errors:
+                    try:
+                        (_snap / "snapshot_errors.txt").write_text(
+                            "\n".join(_snap_errors), encoding="utf-8"
+                        )
+                    except Exception:
+                        pass
+
     def fetch_texts(
         self,
         urls: list[str],
@@ -339,11 +476,11 @@ def check_for_updates(
     """
     def norm(url: str) -> str:
         from urllib.parse import unquote as _unquote
-        url = re.sub(r"\?.*$", "", url.strip())
+        url = re.sub(r"\?.*$", "", url.strip()).rstrip("/")
         prev = None
         while prev != url:
             prev = url
-            url = _unquote(url)
+            url = _unquote(url).rstrip("/")
         return url
 
     new_by_profile: dict[str, list[dict]] = {}
@@ -390,6 +527,38 @@ def scrape_articles(
         return sess.scrape_profile(profile, known_urls=known_urls)
 
 
+def scrape_posts(
+    email: str,
+    password: str,
+    profile: str = "cesarbrod",
+    known_urls: Optional[set] = None,
+    verbose: bool = True,
+    max_scrolls: int = 60,
+    stop_at_known: bool = True,
+    on_post: Optional[Callable] = None,
+) -> list[dict]:
+    """
+    Helper: create a temporary session, log in, scrape regular posts, close.
+
+    known_urls: set of normalised URLs already in the DB for this profile.
+                With stop_at_known (default), scraping stops at the first
+                known URL. Pass stop_at_known=False to scroll past known
+                URLs toward older history (resumable full sync).
+    max_scrolls: safety cap on listing scrolls (raise for full history).
+    on_post: optional callback(post) for incremental persistence.
+    Returns list of {text, url, published} for new posts only.
+    """
+    with LinkedInSession(verbose=verbose) as sess:
+        sess.login(email, password)
+        return sess.scrape_posts(
+            profile,
+            known_urls=known_urls,
+            max_scrolls=max_scrolls,
+            stop_at_known=stop_at_known,
+            on_post=on_post,
+        )
+
+
 def fetch_article_text(url: str, email: str, password: str, verbose: bool = True) -> str:
     """CLI helper: fetch a single article's text."""
     results = fetch_articles_text([url], email, password, verbose=verbose)
@@ -413,12 +582,18 @@ def fetch_articles_text(
 # ── Internal page helpers ──────────────────────────────────────────────────────
 
 def _norm_url(url: str) -> str:
-    """Normalise a URL: strip query params and decode percent-encoding until stable."""
-    url = re.sub(r"\?.*$", "", url.strip())
+    """Normalise a URL: strip query params and trailing slashes, decode
+    percent-encoding until stable.
+
+    Trailing slashes are stripped: LinkedIn serves the same article as
+    .../pulse/<slug> and .../pulse/<slug>/, and without this both variants
+    were stored as separate rows (52 duplicate pairs seen 2026-09-14).
+    """
+    url = re.sub(r"\?.*$", "", url.strip()).rstrip("/")
     prev = None
     while prev != url:
         prev = url
-        url = unquote(url)
+        url = unquote(url).rstrip("/")
     return url
 
 
@@ -720,6 +895,505 @@ def _extract_articles(
         print(f"  Total: {len(articles)} {label}.")
 
     return articles
+
+
+_POST_LINK_SELECTORS = (
+    "a[href*='/posts/']:not([href*='/analytics/'])",
+    "a[href*='/feed/update/']",
+    "a[href*='urn%3Ali%3Aactivity']",
+    "a[href*='urn:li:activity']",
+    "a[href*='urn%3Ali%3AugcPost']",
+    "a[href*='urn:li:ugcPost']",
+    "a[href*='urn%3Ali%3Ashare']",
+    "a[href*='urn:li:share']",
+)
+
+# Matches a LinkedIn activity URN in either plain (urn:li:activity:123) or
+# percent-encoded (urn%3Ali%3Aactivity%3A123) form.
+_ACTIVITY_ID_RE = re.compile(
+    r"urn(?:%3A|:|%253A)li(?:%3A|:|%253A)activity(?:%3A|:|%253A)(\d+)",
+    re.IGNORECASE,
+)
+
+# Any other LinkedIn post-ish URN (ugcPost, share, …) in plain or encoded form.
+_OTHER_POST_URN_RE = re.compile(
+    r"urn(?:%3A|:|%253A)li(?:%3A|:|%253A)(?:ugcPost|share)(?:%3A|:|%253A)(\d+)",
+    re.IGNORECASE,
+)
+
+
+def _canonical_post_url(href: str) -> str:
+    """Turn a listing-page href into a canonical absolute post permalink.
+
+    - Activity links (/posts/..., /feed/update/urn:li:activity:...) become
+      the canonical `feed/update/urn:li:activity:<id>` permalink.
+    - Per-card "View analytics" links (/analytics/post-summary/...) are
+      converted to the same canonical permalink derived from the URN, so
+      stored URLs always open the real post.
+    - Other post-flavoured links (ugcPost/share URNs, other /feed/update/
+      links) are kept absolutised — better stored than skipped.
+    - Anything that is not a recognisable post link returns "".
+    """
+    href = (href or "").strip()
+    if not href:
+        return ""
+    m = _ACTIVITY_ID_RE.search(href)
+    if m:
+        return f"https://www.linkedin.com/feed/update/urn:li:activity:{m.group(1)}"
+    abs_url = _absolutize_post_url(href)
+    if "/posts/" in abs_url or "/feed/update/" in abs_url:
+        return _norm_url(abs_url)
+    if _OTHER_POST_URN_RE.search(href):
+        return _norm_url(abs_url)
+    return ""
+
+
+def _absolutize_post_url(href: str) -> str:
+    """Turn a listing-page href into an absolute LinkedIn URL."""
+    href = (href or "").strip()
+    if not href:
+        return ""
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith("/"):
+        return _LINKEDIN_BASE + href
+    if href.startswith(("http://", "https://")):
+        return href
+    return _LINKEDIN_BASE + "/" + href.lstrip("./")
+
+
+_POST_CHROME_PATTERNS = (
+    re.compile(r"^feed post$", re.IGNORECASE),
+    re.compile(r"^promote this post.*$", re.IGNORECASE),
+    re.compile(r"^this post doesn.?t qualify to be boosted\.?$", re.IGNORECASE),
+    re.compile(r"^boost$", re.IGNORECASE),
+    re.compile(r"^view analytics$", re.IGNORECASE),
+    re.compile(r"^show translation$", re.IGNORECASE),
+    re.compile(r"^[.…]*\s*more$", re.IGNORECASE),
+    re.compile(r"^\d+\s+(impressions?|comments?|reposts?|reactions?)$", re.IGNORECASE),
+    re.compile(r"^\d+[mhwd]\s*•?.*$", re.IGNORECASE),  # "4m •" timestamps
+    re.compile(r"^•\s*(you|[123](st|nd|rd|th))$", re.IGNORECASE),  # "• You"/"• 1st"
+)
+
+_TRAILING_INT_RE = re.compile(r"^\d{1,5}$")
+
+
+def _strip_leading_actor_block_lines(lines: list[str]) -> tuple[list[str], Optional[str]]:
+    """Drop a leading author name + headline line pair from card text lines.
+
+    On activity listings the card header is `<Name>` followed by the profile
+    headline (a long `|`-separated line, e.g. "Community Leader | Agile &
+    Open Source Transformation | … | Writer"). Neither is part of the post,
+    so both are removed. The headline requirements (contains `|`, longer
+    than 40 chars) keep this from eating real post openers — a genuine body
+    almost never starts with a short punctuation-free line immediately
+    followed by a long pipe-separated line.
+
+    Returns (remaining_lines, removed_name_or_None).
+    """
+    out = list(lines)
+    if len(out) >= 2:
+        first, second = out[0], out[1]
+        if (
+            "|" in second
+            and len(second) > 40
+            and len(first) <= 60
+            and "|" not in first
+            and "http" not in first
+            and not re.search(r"[.!?…:]$", first)
+        ):
+            return out[2:], first
+    return out, None
+
+
+def _strip_trailing_actor_footprint(
+    lines: list[str], names: set[str]
+) -> list[str]:
+    """Drop a trailing author-name + reaction-count footprint.
+
+    Some cards end with a footer like `<Name>` / `1` / `4` (liker name plus
+    bare engagement counts). A trailing run made only of the author name and
+    bare integers is removed — but only when the run actually contains the
+    name, so a body that legitimately ends in a number is never touched.
+    A fully-consumed text means a chrome-only card → returns [].
+    """
+    if not names or not lines:
+        return lines
+    i = len(lines)
+    seen_name = False
+    while i > 0 and (len(lines) - i) < 6:
+        ln = lines[i - 1]
+        if ln in names:
+            seen_name = True
+            i -= 1
+        elif _TRAILING_INT_RE.match(ln):
+            i -= 1
+        else:
+            break
+    if seen_name:
+        return lines[:i]
+    return lines
+
+
+def _clean_post_text(raw: str, actor_text: Optional[str] = None) -> str:
+    """Strip LinkedIn feed chrome from a card's text, keeping the post body.
+
+    Removes promo/analytics lines ("Promote this post…", "This post doesn't
+    qualify to be boosted.", "Boost", "View analytics", impression counts,
+    "Feed post", timestamps, "• You"/"• 1st" markers) as well as the card's
+    author header (name + `|`-separated headline, e.g. "Cesar Brod" /
+    "Community Leader | Agile & … | Writer") and any trailing liker-name /
+    reaction-count footprint, so the stored text — and keyword search over
+    it — starts and ends at the actual post body. Reshared-post attribution
+    (a *different* author's name) is kept — it is real content.
+    When the card's actor-block text is known it is removed by exact line
+    match; otherwise a headline-shape heuristic strips the leading pair.
+    Chrome/header-only cards yield "".
+    """
+    if not raw:
+        return ""
+    actor_lines: set[str] = set()
+    if actor_text:
+        for ln in actor_text.strip().splitlines():
+            ln = ln.strip().strip("​\u200b")
+            if ln:
+                actor_lines.add(ln)
+    lines = [ln.strip() for ln in raw.strip().splitlines()]
+    kept: list[str] = []
+    for ln in lines:
+        if not ln or ln == "​" or ln == "\u200b":
+            continue
+        if any(pat.match(ln) for pat in _POST_CHROME_PATTERNS):
+            continue
+        kept.append(ln)
+    # Trailing footprint BEFORE actor lines are filtered out: the run
+    # `<Name>` / `1` / `4` is only recognisable while the name line is
+    # still present (exact-match filtering below would eat it first and
+    # leave orphan counts behind).
+    kept, removed_first = _strip_leading_actor_block_lines(kept)
+    names = set(actor_lines)
+    if removed_first:
+        names.add(removed_first)
+    kept = _strip_trailing_actor_footprint(kept, names)
+    kept = [ln for ln in kept if ln not in actor_lines]
+    text = "\n".join(kept)
+    text = re.sub(r"\n{3,}", "\n\n", text.strip())
+    return text
+
+
+def _click_more_buttons(page: Page) -> int:
+    """Click exact-text "more" buttons; returns how many were clicked.
+
+    Covers BOTH per-post expanders ("…more", "see more") AND the end-of-feed
+    pagination button ("Show more") — LinkedIn's activity listing is finite
+    scroll: only the first ~20 posts render initially and each "Show more"
+    click appends the next batch. Clicking an expander is equally desired
+    (full post text). "Show translation" buttons are deliberately NOT
+    touched (they would inject translated duplicates). Matching is exact
+    (case-insensitive) so "Show more replies"-style buttons are left alone.
+    """
+    clicked = 0
+    try:
+        buttons = page.query_selector_all("button")
+    except Exception:
+        return 0
+    for btn in buttons:
+        try:
+            label = (btn.inner_text() or "").strip().lower()
+        except Exception:
+            continue
+        if label not in ("show more", "…more", "… more", "see more"):
+            continue
+        try:
+            if not btn.is_visible():
+                continue
+            btn.click()
+            clicked += 1
+            time.sleep(0.3)
+        except Exception:
+            continue
+    return clicked
+
+
+def _extract_post_card_text(page: Page, anchor) -> str:
+    """
+    Extract the post body from the single feed card containing the anchor.
+
+    Finds the closest card root (a `div.feed-shared-update-v2`, `[data-urn]`,
+    `<article>` or `<li>` ancestor) and prefers known post-body selectors
+    inside it (`.feed-shared-update-v2__description`,
+    `.update-components-text`, `.feed-shared-inline-show-more-text`).
+    Falls back to the card root's own text. The card's actor block
+    (author name + headline + timestamp) is captured separately and removed
+    by exact line match, so the stored text starts at the real post body.
+    Remaining feed chrome ("Promote this post…", "Boost", "View analytics",
+    …) is stripped the same way.
+
+    The previous longest-ancestor approach grabbed a whole-feed container,
+    storing the same giant blob (starting with the promo text) for every
+    post — which is why search only ever matched "Promote".
+    """
+    try:
+        res = anchor.evaluate("""el => {
+            const BODY_SELS = [
+                '.feed-shared-update-v2__description',
+                '.update-components-text',
+                '.update-components-update-v2__commentary',
+                '.feed-shared-inline-show-more-text',
+                '.feed-shared-text',
+                '[data-test-id="post-content"]',
+            ];
+            const ACTOR_SELS = [
+                '.update-components-actor',
+                '.feed-shared-actor',
+            ];
+            let node = el;
+            let card = null;
+            for (let i = 0; i < 8; i++) {
+                if (!node.parentElement) break;
+                node = node.parentElement;
+                if (node.matches && (
+                    node.matches('div.feed-shared-update-v2') ||
+                    node.matches('[data-urn]') ||
+                    node.matches('article') ||
+                    node.matches('li')
+                )) { card = node; break; }
+            }
+            if (!card) {
+                node = el;
+                for (let i = 0; i < 3; i++) {
+                    if (!node.parentElement) break;
+                    node = node.parentElement;
+                }
+                card = node;
+            }
+            let actor = '';
+            for (const sel of ACTOR_SELS) {
+                try {
+                    const a = card.querySelector(sel);
+                    if (a && (a.innerText || '').trim()) {
+                        actor = a.innerText;
+                        break;
+                    }
+                } catch (e) { /* try next selector */ }
+            }
+            for (const sel of BODY_SELS) {
+                try {
+                    const body = card.querySelector(sel);
+                    if (body && (body.innerText || '').trim().length >= 10) {
+                        return {text: body.innerText, actor: actor};
+                    }
+                } catch (e) { /* try next selector */ }
+            }
+            return {text: card.innerText || '', actor: actor};
+        }""")
+    except Exception:
+        return ""
+    if isinstance(res, dict):
+        text, actor_text = res.get("text") or "", res.get("actor") or ""
+    else:  # pragma: no cover — defensive, evaluate always returns a dict
+        text, actor_text = res or "", ""
+    return _clean_post_text(text, actor_text=actor_text)
+
+
+def _extract_posts(
+    page: Page,
+    known_urls: Optional[set] = None,
+    verbose: bool = True,
+    max_scrolls: int = 60,
+    debug_log: Optional[list] = None,
+    stop_at_known: bool = True,
+    on_post: Optional[Callable] = None,
+) -> list[dict]:
+    """
+    Scroll the regular-posts activity listing and collect new posts.
+
+    known_urls: normalised URL set for this profile already in the DB.
+                With stop_at_known=True, scrolling stops as soon as any post
+                URL matches a known URL, since posts are listed newest-first.
+                Pass None to collect everything (full sync / first run /
+                full-history resync).
+
+    max_scrolls: safety cap on listing scrolls — raise for full-history
+                 resyncs of profiles with hundreds of posts.
+
+    debug_log: optional list receiving one dict per scroll round
+               ({round, height, anchors, new_urls, more_clicks, seen_total,
+               posts_total}) plus a final {event: done, reason} entry where
+               reason is one of "known-url" | "stagnant-bottom" |
+               "max-scrolls" | "crashed: ..." (a crash still appends).
+
+    stop_at_known: False scrolls PAST known URLs (full-history resync),
+                   skipping only their text extraction — re-runs therefore
+                   resume cheaply where a crashed run left off.
+
+    on_post: optional callback(post) invoked per newly extracted post as
+             soon as it is scraped, for incremental persistence.
+
+    Returns list of {text, url, published} for new posts only.
+    """
+    posts: list[dict] = []
+    seen_urls: set[str] = set()
+    stop_early = False
+    stop_reason = "max-scrolls"
+
+    if verbose:
+        mode = "incremental (stops at first known post)" if known_urls else "full"
+        print(f"Scrolling posts listing ({mode}, max {max_scrolls} scrolls)…")
+
+    prev_height = 0
+    prev_post_count = 0
+    stagnant = 0
+    scroll_attempts = 0
+
+    selector = ", ".join(_POST_LINK_SELECTORS)
+
+    while scroll_attempts < max_scrolls:
+        # Expand truncated posts ("…more") AND advance LinkedIn's finite
+        # scroll ("Show more" pagination button at the end of the feed —
+        # each click appends the next batch of ~10-20 posts). Both are
+        # desired clicks; "Show translation" is never touched.
+        more_clicks = _click_more_buttons(page)
+
+        anchors = page.query_selector_all(selector)
+        new_this_round = 0
+
+        for anchor in anchors:
+            try:
+                href = anchor.get_attribute("href") or ""
+                url = _canonical_post_url(href)
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                new_this_round += 1
+
+                is_known = bool(known_urls) and url in known_urls
+                if is_known and stop_at_known:
+                    # Incremental mode: we've reached previously-seen
+                    # content, no need to scroll further.
+                    if verbose:
+                        print(f"  ↩  Reached known post — stopping early.")
+                    stop_early = True
+                    break
+
+                if is_known:
+                    # Full-resync resume: already saved (a previous run or
+                    # an earlier on_post call) — skip the expensive text
+                    # extraction, keep scrolling toward older history.
+                    continue
+
+                text = _extract_post_card_text(page, anchor)
+                if not text or len(text) < 20:
+                    continue
+
+                published = _find_date_near(page, anchor)
+                post = {"text": text, "url": url, "published": published}
+                posts.append(post)
+                if on_post is not None:
+                    try:
+                        on_post(post)
+                    except Exception as e:
+                        if verbose:
+                            print(f"  ⚠  on_post failed: {e}")
+
+                if verbose:
+                    print(f"  + {text[:70].replace(chr(10), ' ')}")
+
+            except Exception:
+                continue
+
+        if stop_early:
+            stop_reason = "known-url"
+            if debug_log is not None:
+                debug_log.append(
+                    {
+                        "round": scroll_attempts,
+                        "height": prev_height,
+                        "anchors": len(anchors),
+                        "new_urls": new_this_round,
+                        "more_clicks": more_clicks,
+                        "seen_total": len(seen_urls),
+                        "posts_total": len(posts),
+                    }
+                )
+            break
+
+        # Jump straight to the bottom: LinkedIn's activity listing only
+        # fetches the next batch near the bottom, so one-viewport steps from
+        # the top never trigger a load (the loop then wrongly concludes it
+        # hit the bottom with just the first ~20 posts). Growth is measured
+        # by BOTH page height and distinct post URLs seen — only after 4
+        # consecutive rounds with neither growing do we stop, since LinkedIn
+        # regularly stalls a batch or two mid-history. After pagination
+        # clicks we wait patiently (a fresh batch takes seconds to render;
+        # performance is intentionally not a concern for full history).
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        if more_clicks:
+            # A pagination click should append a fresh batch — wait
+            # patiently (up to ~10s) for new anchors to appear rather
+            # than a fixed sleep: faster when LinkedIn is quick, more
+            # tolerant when it stalls. Performance is not a concern here.
+            waited = 0.0
+            while waited < 10:
+                time.sleep(1)
+                waited += 1
+                try:
+                    if len(page.query_selector_all(selector)) != len(anchors):
+                        break
+                except Exception:
+                    break
+        else:
+            time.sleep(2.5 if max_scrolls > 60 else 1.5)
+        new_height = page.evaluate("document.body.scrollHeight")
+        scroll_attempts += 1
+
+        grown = (new_height != prev_height) or (len(seen_urls) != prev_post_count)
+        if grown:
+            stagnant = 0
+        else:
+            stagnant += 1
+            if stagnant >= 4:
+                # No new content loaded — we've reached the bottom
+                stop_reason = "stagnant-bottom"
+                if debug_log is not None:
+                    debug_log.append(
+                        {
+                            "round": scroll_attempts,
+                            "height": new_height,
+                            "anchors": len(anchors),
+                            "new_urls": new_this_round,
+                            "more_clicks": more_clicks,
+                            "seen_total": len(seen_urls),
+                            "posts_total": len(posts),
+                        }
+                    )
+                break
+        if debug_log is not None:
+            debug_log.append(
+                {
+                    "round": scroll_attempts,
+                    "height": new_height,
+                    "anchors": len(anchors),
+                    "new_urls": new_this_round,
+                    "more_clicks": more_clicks,
+                    "seen_total": len(seen_urls),
+                    "posts_total": len(posts),
+                }
+            )
+        prev_height = new_height
+        prev_post_count = len(seen_urls)
+
+        if verbose and scroll_attempts % 10 == 0:
+            print(f"  … {scroll_attempts} scrolls, {len(seen_urls)} posts seen")
+
+    if verbose:
+        label = "new post(s) found" if known_urls else "post(s) found"
+        print(f"  Total: {len(posts)} {label}.")
+
+    if debug_log is not None:
+        debug_log.append({"event": "done", "reason": stop_reason})
+
+    return posts
 
 
 def _extract_article_rich(page: Page) -> dict:

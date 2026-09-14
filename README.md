@@ -48,12 +48,37 @@ python web_server.py --no-browser   # don't open the browser automatically
 | **Migrate old articles to HTML** | Dashboard → "Migrate to HTML" button |
 | **Read an article offline** | List or Search → click the article title |
 | **Search articles** | Search page — supports AND, OR, exact phrases |
+| **Browse / search regular posts** | Posts page (top menu) — same search syntax, no ebook export |
+| **Sync new posts** | Posts page → "Sync posts" button (fast, incremental) |
+| **Backfill full post history** | Posts page → "Sync full history" button (very slow, see below) |
 | **Export to ePub / DOCX / PDF** | Search page → Generate ebook panel |
 | **Select & reorder ebook articles** | Search page → Generate ebook → "Preview & reorder" |
 
 ### Credentials
 
 Your LinkedIn credentials are entered once via the Sign in page. They are stored **in memory only** for the duration of the browser session — never written to disk. They are cleared when you click "Clear credentials" or close the browser.
+
+---
+
+## LinkedIn Posts (regular posts, not articles)
+
+The **Posts** page (top menu) downloads and keyword-searches your normal
+LinkedIn posts — the same AND / OR / "exact phrase" syntax as article
+search. Posts are never exported to ebooks. Stored post text is the real
+post body: feed chrome ("Promote this post…", "Boost", "View analytics",
+impression counts) and the author name/headline header are stripped out.
+
+| Button | What it does |
+|---|---|
+| **Sync posts** | Fast incremental sync — fetches only posts newer than the newest stored one, then stops. Use this day to day. |
+| **Sync full history** | Walks your **entire** activity backlog batch by batch ("Show more" pagination), oldest to newest, saving each post as it goes. |
+
+Full history notes:
+
+- **It takes a really very long time** (easily 10–30+ minutes for 50–150 posts). Keep the browser window open and the computer awake until the confirmation appears. Run it once; later syncs are incremental again.
+- **It resumes.** If the page crashes deep in history ("Target crashed" — a hundred-post LinkedIn page exhausts the browser tab's memory), progress up to the crash is already saved and the status line says so (*"⚠ Partial: N new saved… run again to resume"*). Just run **Sync full history** again — it cheaply walks over already-saved posts and continues where it stopped.
+- Media-only posts with no text are skipped (nothing to search).
+- To save memory during long syncs, images/video are blocked while post listings load — text extraction is unaffected.
 
 ---
 
@@ -171,7 +196,9 @@ overlaid on it. Without an upload, a plain title page is used instead.
 
 ## Database
 
-Articles are stored in `articles.db` (SQLite) in the project folder. Content is stored as **self-contained HTML** with images embedded as base64 data URIs, so articles are readable offline with no internet connection.
+Articles are stored in `articles.db` (SQLite) in the project folder. Content is stored as **self-contained HTML** with images embedded as base64 data URIs, so articles are readable offline with no internet connection. Regular posts live in the same database (`posts` table) as plain text.
+
+URL hygiene: LinkedIn serves the same page with and without a trailing slash (`.../pulse/<slug>` vs `.../pulse/<slug>/`). All URLs are normalised on write (slashes, query strings, encoding), so re-syncs update rows instead of duplicating them.
 
 ---
 
@@ -181,6 +208,7 @@ Articles are stored in `articles.db` (SQLite) in the project folder. Content is 
 - LinkedIn may show a security challenge (CAPTCHA) during login. The tool will pause and ask you to resolve it in the browser window.
 - Run `fix_dates.py` once after migrating from an older version to backfill missing publication dates.
 - Run `fix_titles.py` if you see article titles that contain snippet text.
+- Full-history post syncs record diagnostics under `debug_posts/` (per-round log + page snapshots, git-ignored) — check the latest `rounds.json` if a run stops short.
 
 ---
 
