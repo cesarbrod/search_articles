@@ -1,5 +1,30 @@
 # Session context — Posts bugfix (2026-09-14)
 
+# SESSION HANDOFF — resume guide (written 2026-09-14, end of session)
+
+## Where / what
+- Project dir: `/home/brod/scripts/kiro/linkedin_articles`
+- GitHub: `github.com/cesarbrod/search_articles`, branch `main`
+- Test entry: `venv/bin/python test_posts_sync.py` (stub suite, no network).
+- Run app: `./run_web_server.sh` (venv python). Server does NOT auto-reload — restart after code changes.
+
+## DB state at handoff
+- `articles.db`: **527 articles** (deduped 579→527 on 2026-09-14), **647 posts**.
+- Backups alongside DB: `articles.db.bak-posts-fix-20260914`, `articles.db.bak-author-strip-20260914`, `articles.db.bak-dedup-20260914` (all git-ignored).
+- The year-old "Negacionismo científico" post IS stored (posts id=62, activity 7497289907552514049) — the backfill reached it.
+- Untracked, do NOT commit: `book.docx/pdf/json` (user exports), `articles.db*`, `debug_posts/`.
+
+## Pending / likely next work
+- Post backfill completeness UNCONFIRMED: latest full run (`debug_posts/cesarbrod_20260914_174833/rounds.json`) did 53 rounds (994 anchors, 658 URLs seen, 625 posts collected that run) then `crashed: Page.evaluate: Target crashed`. Stop was crash, NOT stagnant-bottom → older history may remain. Next step: re-run "Sync full history" (resumes cheaply past the 647 known) and check whether it ends with stagnant-bottom (done) or crashes again (needs more hardening, e.g. chunked passes).
+- User estimate was 50–150 posts; DB now holds 647 (reshares/older backlog included?) — sanity-check count vs LinkedIn profile activity counter if questioned.
+- Incremental post syncs + article flows untouched by the above; article dup issue resolved via slash-stripping normalizers.
+
+## Standing rules from the user
+- Never ask for or store LinkedIn credentials — diagnose via `debug_posts/` snapshots + `rounds.json` (auto-saved on every full sync).
+- Don't push to GitHub unless explicitly asked (batch up issues, fix on GO).
+- `test_posts_sync.py` must stay green (run after any scraper.py change).
+
+---
 ## User-reported problems
 1. Dashboard (`/`): for every profile, right below "List Search", Posts appears as
    `<h2 style="margin-top:2rem">Posts</h2>`, not as a link.
